@@ -116,8 +116,21 @@ public struct Tmux {
         case let .ssh(host):
             // ssh host 'tmux ...'
             let remote = ShellEscape.joinSh(tmuxArgs)
-            let res = try shell.run(["/usr/bin/ssh", "-T", host, "bash", "-lc", remote])
-            return res
+            let env = ProcessInfo.processInfo.environment
+            if let pw = env["COLONY_SSH_PASSWORD"], !pw.isEmpty {
+                // Use sshpass when available so Colony can drive password-based SSH non-interactively.
+                // Also accept-new to avoid first-connect host key prompts.
+                let check = try? shell.run(["/usr/bin/env", "bash", "-lc", "command -v sshpass >/dev/null 2>&1"])
+                if check?.exitCode == 0 {
+                    return try shell.run([
+                        "/usr/bin/env", "sshpass", "-p", pw,
+                        "ssh",
+                        "-o", "StrictHostKeyChecking=accept-new",
+                        "-T", host, "bash", "-lc", remote
+                    ])
+                }
+            }
+            return try shell.run(["/usr/bin/ssh", "-o", "StrictHostKeyChecking=accept-new", "-T", host, "bash", "-lc", remote])
         }
     }
 }

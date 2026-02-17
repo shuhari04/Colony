@@ -16,6 +16,7 @@ struct Usage {
           colony keys   <@addr> <key...>
           colony recv   <@addr> [--lines N]
           colony watch  <@addr> [--lines N] [--interval-ms N] [--duration-sec N] [--no-initial]
+          colony agent  <codex|claude> [--model MODEL]
           colony codex-rate-limit [--json]
           colony list   [local|<sshHostAlias>]
           colony attach <@addr>
@@ -99,6 +100,113 @@ func computeAppendedLines(old: [String], new: [String]) -> [String] {
     }
     // No overlap; treat as a full redraw.
     return new
+}
+
+func runStreaming(_ cmd: [String], extraEnv: [String: String] = [:]) throws -> Int32 {
+    precondition(!cmd.isEmpty)
+
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: cmd[0])
+    p.arguments = Array(cmd.dropFirst())
+
+    var env = ProcessInfo.processInfo.environment
+    for (k, v) in extraEnv { env[k] = v }
+    p.environment = env
+
+    let pipe = Pipe()
+    p.standardOutput = pipe
+    p.standardError = pipe
+
+    try p.run()
+
+    // Stream bytes as they arrive.
+    let h = pipe.fileHandleForReading
+    while true {
+        let data = h.availableData
+        if data.isEmpty { break }
+        FileHandle.standardOutput.write(data)
+    }
+    p.waitUntilExit()
+    return p.terminationStatus
+}
+
+func runAgentCodex(initialModel: String) throws -> Never {
+    var model = initialModel
+    print("[colony-agent] codex ready (model=\(model))")
+    fflush(stdout)
+
+    while let lineRaw = readLine(strippingNewline: true) {
+        let line = lineRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if line.isEmpty { continue }
+        if line.hasPrefix("/model ") {
+            let m = line.dropFirst("/model ".count).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !m.isEmpty {
+                model = m
+                print("[colony-agent] model set to \(model)")
+                fflush(stdout)
+            }
+            continue
+        }
+
+        print("[colony-agent] >>> \(line)")
+        fflush(stdout)
+
+        // Use zsh -lc so PATH matches the user's typical interactive shell.
+        let tokens: [String] = [
+            "codex", "exec",
+            "--json",
+            "--skip-git-repo-check",
+            "-m", model,
+            line
+        ]
+        let sh = ShellEscape.joinSh(tokens)
+        _ = try runStreaming(["/usr/bin/env", "zsh", "-lc", sh])
+
+        print("[colony-agent] <<< done")
+        fflush(stdout)
+    }
+    exit(0)
+}
+
+func runAgentClaude(initialModel: String?) throws -> Never {
+    var model = initialModel
+    print("[colony-agent] claude ready\(model == nil ? "" : " (model=\(model!))")")
+    fflush(stdout)
+
+    while let lineRaw = readLine(strippingNewline: true) {
+        let line = lineRaw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if line.isEmpty { continue }
+        if line.hasPrefix("/model ") {
+            let m = line.dropFirst("/model ".count).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !m.isEmpty {
+                model = m
+                print("[colony-agent] model set to \(model!)")
+                fflush(stdout)
+            }
+            continue
+        }
+
+        print("[colony-agent] >>> \(line)")
+        fflush(stdout)
+
+        var tokens: [String] = [
+            "claude",
+            "-p",
+            "--verbose",
+            "--output-format=stream-json",
+            "--include-partial-messages",
+        ]
+        if let model, !model.isEmpty {
+            tokens.append(contentsOf: ["--model", model])
+        }
+        tokens.append(line)
+        let sh = ShellEscape.joinSh(tokens)
+        _ = try runStreaming(["/usr/bin/env", "zsh", "-lc", sh])
+
+        print("[colony-agent] <<< done")
+        fflush(stdout)
+    }
+    exit(0)
 }
 
 do {
@@ -220,6 +328,25 @@ do {
         }
         // Clean exit after duration.
         exit(0)
+
+    case "agent":
+        let kind = try pop(&args, name: "codex|claude")
+        var model: String? = nil
+        while let flag = args.first {
+            if flag == "--model" {
+                args = args.dropFirst()
+                model = try pop(&args, name: "MODEL")
+            } else {
+                throw CLIError.invalid("unknown flag: \(flag)")
+            }
+        }
+        if kind == "codex" {
+            try runAgentCodex(initialModel: model ?? "gpt-5.2")
+        } else if kind == "claude" {
+            try runAgentClaude(initialModel: model)
+        } else {
+            throw CLIError.invalid("agent kind must be 'codex' or 'claude'")
+        }
 
     case "codex-rate-limit", "codex-ratelimit":
         var json = false
