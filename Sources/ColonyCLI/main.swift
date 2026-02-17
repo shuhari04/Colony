@@ -16,6 +16,7 @@ struct Usage {
           colony keys   <@addr> <key...>
           colony recv   <@addr> [--lines N]
           colony watch  <@addr> [--lines N] [--interval-ms N] [--duration-sec N] [--no-initial]
+          colony codex-rate-limit [--json]
           colony list   [local|<sshHostAlias>]
           colony attach <@addr>
 
@@ -219,6 +220,64 @@ do {
         }
         // Clean exit after duration.
         exit(0)
+
+    case "codex-rate-limit", "codex-ratelimit":
+        var json = false
+        while let flag = args.first {
+            if flag == "--json" {
+                json = true
+                args = args.dropFirst()
+            } else {
+                throw CLIError.invalid("unknown flag: \(flag)")
+            }
+        }
+
+        let reader = CodexRateLimitReader()
+        let snap = try reader.latestCodexRateLimit()
+
+        if json {
+            let enc = JSONEncoder()
+            enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+
+            struct Out: Codable {
+                let timestamp: String?
+                let sourceFile: String
+                let rateLimits: CodexRateLimits
+            }
+
+            let ts = snap.timestamp.map { ISO8601DateFormatter().string(from: $0) }
+            let out = Out(timestamp: ts, sourceFile: snap.sourceFile, rateLimits: snap.rateLimits)
+            let data = try enc.encode(out)
+            guard let s = String(data: data, encoding: .utf8) else { throw CLIError.invalid("failed to encode json") }
+            print(s)
+        } else {
+            func fmtWindow(_ name: String, _ w: CodexRateLimits.Window?) -> String {
+                guard let w else { return "\(name): (missing)" }
+                let used = w.usedPercent.map { String(format: "%.1f%% used", $0) } ?? "used: ?"
+                let win = w.windowMinutes.map { "window: \($0)m" } ?? "window: ?"
+                let reset: String
+                if let ra = w.resetsAt {
+                    let d = Date(timeIntervalSince1970: TimeInterval(ra))
+                    reset = "resetsAt: \(ISO8601DateFormatter().string(from: d))"
+                } else {
+                    reset = "resetsAt: ?"
+                }
+                return "\(name): \(used) (\(win), \(reset))"
+            }
+
+            print("codex rate limits")
+            if let ts = snap.timestamp {
+                print("observedAt: \(ISO8601DateFormatter().string(from: ts))")
+            }
+            print("source: \(snap.sourceFile)")
+            if let limitId = snap.rateLimits.limitId { print("limitId: \(limitId)") }
+            print(fmtWindow("primary", snap.rateLimits.primary))
+            print(fmtWindow("secondary", snap.rateLimits.secondary))
+            if let c = snap.rateLimits.credits {
+                let bal = c.balance.map { "\($0)" } ?? "null"
+                print("credits: hasCredits=\(c.hasCredits ?? false) unlimited=\(c.unlimited ?? false) balance=\(bal)")
+            }
+        }
 
     case "list":
         var t: Target = .local
