@@ -67,8 +67,14 @@ public struct Tmux {
     }
 
     public func sendKeys(target: Target, session: String, text: String, pressEnter: Bool) throws {
-        var args = ["tmux", "send-keys", "-t", session, "--", text]
-        if pressEnter { args.append("Enter") }
+        var keys: [String] = [text]
+        if pressEnter { keys.append("Enter") }
+        try sendKeySequence(target: target, session: session, keys: keys)
+    }
+
+    public func sendKeySequence(target: Target, session: String, keys: [String]) throws {
+        var args = ["tmux", "send-keys", "-t", session, "--"]
+        args.append(contentsOf: keys)
         let res = try runTmux(target: target, tmuxArgs: args)
         if res.exitCode != 0 {
             throw TmuxError.commandFailed("Failed to send keys to \(session): \(res.stderr)")

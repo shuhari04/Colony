@@ -23,6 +23,10 @@ public struct ColonyService {
         try tmux.sendKeys(target: address.target, session: address.session, text: text, pressEnter: pressEnter)
     }
 
+    public func keys(address: Address, keys: [String]) throws {
+        try tmux.sendKeySequence(target: address.target, session: address.session, keys: keys)
+    }
+
     public func recv(address: Address, lines: Int) throws -> String {
         try tmux.capturePane(target: address.target, session: address.session, lines: lines)
     }
