@@ -59,7 +59,6 @@ class _CommandBarState extends State<CommandBar> {
         addr = widget.state.resolveAddressShorthand(raw.substring(0, idx));
         msg = raw.substring(idx + 1).trimLeft();
       } else {
-        // Only target provided; keep focus in the bar.
         return;
       }
     }

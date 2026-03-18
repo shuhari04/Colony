@@ -42,7 +42,6 @@ class _WorldCanvasState extends State<WorldCanvas> {
   @override
   void initState() {
     super.initState();
-    // Defer initial camera framing until we know the viewport size.
   }
 
   @override
@@ -117,7 +116,6 @@ class _WorldCanvasState extends State<WorldCanvas> {
 
   void _frameInitialCamera(Size viewport) {
     final o = _origin();
-    // Put origin slightly above center so bases sit in a comfortable viewing area.
     final target = Offset(viewport.width * 0.5, viewport.height * 0.52);
     final t = target - o;
     _tc.value = Matrix4.identity()
@@ -257,7 +255,6 @@ class _WorldPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    // Light vignette to keep the center readable.
     final vignette = Paint()
       ..shader = RadialGradient(
         colors: [
@@ -268,7 +265,6 @@ class _WorldPainter extends CustomPainter {
       ).createShader(Rect.fromCircle(center: origin, radius: 1400));
     canvas.drawRect(Offset.zero & size, vignette);
 
-    // 45-degree dot matrix (isometric lattice). Dots get slightly dimmer with distance.
     const span = 46;
     final base = Paint()..style = PaintingStyle.fill;
     for (var x = -span; x <= span; x++) {
@@ -281,7 +277,6 @@ class _WorldPainter extends CustomPainter {
         final a = lerpDouble(0.62, 0.12, t)!;
         final r = lerpDouble(2.15, 1.20, t)!;
 
-        // Subtle accent "constellation" to stop the ground reading as flat black.
         final isAccent = ((x + y) % 17 == 0) || ((x - y) % 23 == 0);
         final c = isAccent ? ColonyColors.accentCyan.withValues(alpha: a * 0.65) : ColonyColors.border0.withValues(alpha: a);
         base.color = c;
@@ -289,7 +284,6 @@ class _WorldPainter extends CustomPainter {
       }
     }
 
-    // A faint "runway" axis to aid orientation.
     final axis = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1
@@ -456,7 +450,6 @@ class _IsoCubePainter extends CustomPainter {
     canvas.drawPath(right, stroke);
     canvas.drawPath(top, stroke);
 
-    // A tiny top highlight so it reads as "glass" instead of flat.
     final hi = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.0

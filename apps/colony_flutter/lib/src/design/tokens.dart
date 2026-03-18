@@ -38,4 +38,3 @@ class ColonyShadows {
         BoxShadow(color: c.withValues(alpha: 0.35), blurRadius: 10, spreadRadius: 0),
       ];
 }
-

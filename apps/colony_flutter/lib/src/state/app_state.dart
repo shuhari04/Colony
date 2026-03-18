@@ -3,8 +3,10 @@ import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 
+import '../application/colony_application.dart';
+import '../domain/colony_domain.dart';
+import '../infrastructure/infrastructure.dart';
 import '../model/entities.dart';
-import '../services/colony_cli.dart';
 
 enum SelectionKind { none, project, session }
 
@@ -18,25 +20,40 @@ class Selection {
 }
 
 class AppState extends ChangeNotifier {
-  final List<Project> projects = [
-    Project(id: 'p_local', nodeId: 'local', name: 'Local', x: 1.0, y: 1.0),
-  ];
+  AppState({
+    ColonyStore? store,
+    ColonyBinaryLocator? binaryLocator,
+    ColonyCommandAdapter? commandAdapter,
+  })  : store = store ?? ColonyStore(),
+        _binaryLocator = binaryLocator ?? const ColonyBinaryLocator(),
+        _cli = commandAdapter {
+    this.store.addListener(_onStoreChanged);
+  }
+
+  final ColonyStore store;
+  final ColonyBinaryLocator _binaryLocator;
+  ColonyCommandAdapter? _cli;
+
+  final List<Project> projects = [];
   final List<Session> sessions = [];
-  final Map<String, String> _sshPasswordByHost = {}; // host -> password (in-memory for now)
+  final Map<String, String> _sshPasswordByHost = {};
+  final Map<String, List<String>> _sessionLogs = {};
+  final Map<String, ColonyLogStream> _logStreamsByTaskId = {};
+  final Map<String, String> _sessionTaskIdByAddress = {};
 
   bool buildMode = false;
   Selection selection = const Selection.none();
 
-  final Map<String, List<String>> _sessionLogs = {};
-  LogStream? _activeLogStream;
-
-  ColonyCli? _cli;
   Map<String, dynamic>? codexRateLimit;
   String? lastError;
 
   Future<void> bootstrap() async {
-    final bin = await ColonyCli.discoverBin();
-    _cli = ColonyCli(bin ?? 'colony');
+    store.bootstrapLocalWorld();
+    _syncProjectsFromStore();
+
+    final bin = await _binaryLocator.discover();
+    _cli ??= ProcessColonyCommandAdapter(bin ?? 'colony');
+
     await refresh();
   }
 
@@ -48,6 +65,7 @@ class AppState extends ChangeNotifier {
       await _refreshRateLimit();
     } catch (e) {
       lastError = '$e';
+      store.patchRuntime(lastError: lastError);
     }
     notifyListeners();
   }
@@ -55,22 +73,31 @@ class AppState extends ChangeNotifier {
   Future<void> _refreshSessions() async {
     final cli = _cli;
     if (cli == null) return;
+
     final addresses = <String>[];
-    for (final p in projects) {
-      final t = p.nodeId == 'local' ? 'local' : p.nodeId;
-      final env = _envForTarget(t);
-      final one = await cli.listSessions(target: t, env: env);
-      addresses.addAll(one);
+    for (final project in projects) {
+      final target = project.nodeId == 'local' ? 'local' : project.nodeId;
+      final env = _envForTarget(target);
+      final listed = await cli.listSessions(target: target, env: env);
+      addresses.addAll(listed);
     }
+
     sessions
       ..clear()
       ..addAll(_sessionsFromAddresses(addresses));
+
+    _syncSessionTasks(addresses);
+    _pruneStreamsForMissingTasks();
   }
 
   Future<void> _refreshRateLimit() async {
     final cli = _cli;
     if (cli == null) return;
     codexRateLimit = await cli.codexRateLimitJson();
+    store.patchRuntime(
+      backendSnapshot: Map<String, Object?>.from(codexRateLimit ?? const {}),
+      lastError: lastError,
+    );
   }
 
   void toggleBuildMode(bool enabled) {
@@ -78,86 +105,124 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  void selectProject(Project p) {
-    selection = Selection.project(p.id);
+  void selectProject(Project project) {
+    selection = Selection.project(project.id);
+    store.selectWorld(project.nodeId);
     _stopStreaming();
     notifyListeners();
   }
 
-  void selectSession(Session s) {
-    selection = Selection.session(s.address);
-    _startStreaming(s.address);
+  void selectSession(Session session) {
+    selection = Selection.session(session.address);
+    final taskId = _taskIdForAddress(session.address);
+    if (taskId != null) {
+      store.selectSessionTask(taskId);
+      _startStreamingForTask(taskId, session.address);
+    } else {
+      _stopStreaming();
+    }
     notifyListeners();
   }
 
   void clearSelection() {
     selection = const Selection.none();
+    store.clearSelection();
     _stopStreaming();
     notifyListeners();
   }
 
-  List<String> logsFor(String address) => _sessionLogs[address] ?? const [];
+  List<String> logsFor(String address) {
+    final taskId = _taskIdForAddress(address);
+    if (taskId != null) {
+      return store.runtime.liveLogsBySessionTaskId[taskId] ?? const [];
+    }
+    return _sessionLogs[address] ?? const [];
+  }
 
   String resolveAddressShorthand(String raw) {
-    // Allow "@foo" to target an existing "@local:foo" / "@host:foo" session if present.
     if (!raw.startsWith('@')) return raw;
     if (raw.contains(':')) return raw;
     final needle = raw.substring(1).toLowerCase();
     if (needle.isEmpty) return raw;
 
-    final exact = sessions.where((s) => s.name.toLowerCase() == needle || s.address.toLowerCase() == raw.toLowerCase()).toList();
+    final exact = sessions.where((session) {
+      return session.name.toLowerCase() == needle || session.address.toLowerCase() == raw.toLowerCase();
+    }).toList();
     if (exact.isNotEmpty) return exact.first.address;
 
-    final fuzzy = sessions.where((s) => s.address.toLowerCase().contains(needle)).toList();
+    final fuzzy = sessions.where((session) => session.address.toLowerCase().contains(needle)).toList();
     if (fuzzy.isNotEmpty) return fuzzy.first.address;
 
-    // Fall back to local session name.
     return '@local:$needle';
   }
 
   Future<void> sendToSelection(String text, {String? addressOverride}) async {
     final cli = _cli;
     if (cli == null) return;
+
     final addrRaw = addressOverride ?? (selection.kind == SelectionKind.session ? selection.id : null);
     final addr = (addrRaw == null) ? null : resolveAddressShorthand(addrRaw);
     if (addr == null || addr.isEmpty) {
       lastError = 'No session selected';
+      store.patchRuntime(lastError: lastError);
       notifyListeners();
       return;
     }
+
     lastError = null;
+    store.patchRuntime(lastError: null);
     notifyListeners();
     try {
       await cli.send(addr, text, env: _envForAddress(addr));
     } catch (e) {
       lastError = '$e';
+      store.patchRuntime(lastError: lastError);
       notifyListeners();
     }
   }
 
-  Future<void> startNewSession(SessionKind kind, String name, {String? model, String nodeId = 'local'}) async {
+  Future<void> startNewSession(
+    SessionKind kind,
+    String name, {
+    String? model,
+    String nodeId = 'local',
+  }) async {
     final cli = _cli;
     if (cli == null) return;
+
     final addr = '@$nodeId:$name';
     final codexModel = (model != null && model.trim().isNotEmpty) ? model.trim() : 'gpt-5.2';
-    final cmd = _commandForSession(kind: kind, nodeId: nodeId, codexModel: codexModel, colonyBin: cli.binPath);
+    final cmd = _commandForSession(
+      kind: kind,
+      nodeId: nodeId,
+      codexModel: codexModel,
+      colonyBin: cli.binPath,
+    );
+
     lastError = null;
+    store.patchRuntime(lastError: null);
     notifyListeners();
     try {
       await cli.startSession(addr, cmd, env: _envForAddress(addr));
       await _refreshSessions();
-      final s = sessions.firstWhere(
-        (x) => x.address == addr,
+      final session = sessions.firstWhere(
+        (candidate) => candidate.address == addr,
         orElse: () => Session(node: NodeRef(nodeId), name: name, kind: kind, x: 3, y: 2),
       );
-      selectSession(s);
+      selectSession(session);
     } catch (e) {
       lastError = '$e';
+      store.patchRuntime(lastError: lastError);
       notifyListeners();
     }
   }
 
-  List<String> _commandForSession({required SessionKind kind, required String nodeId, required String codexModel, required String colonyBin}) {
+  List<String> _commandForSession({
+    required SessionKind kind,
+    required String nodeId,
+    required String codexModel,
+    required String colonyBin,
+  }) {
     final isLocal = nodeId == 'local';
     if (isLocal) {
       return switch (kind) {
@@ -167,7 +232,6 @@ class AppState extends ChangeNotifier {
       };
     }
 
-    // Remote: run a tiny bash agent loop without requiring Colony to be installed on the remote.
     return switch (kind) {
       SessionKind.codex => <String>[
           '/usr/bin/env',
@@ -186,13 +250,11 @@ class AppState extends ChangeNotifier {
   }
 
   String _remoteBashAgentCodex({required String model}) {
-    // Single-line bash loop; tmux will run this on the remote machine.
-    // Reads one prompt per line and streams `codex exec --json` output.
-    final m = model.replaceAll("'", ""); // model already validated in UI; keep it simple.
+    final sanitized = model.replaceAll("'", '');
     final script = r'''
 set -euo pipefail
 MODEL="''' +
-        m +
+        sanitized +
         r'''"
 echo "[colony-agent] codex remote ready (model=$MODEL)"
 while IFS= read -r line; do
@@ -208,7 +270,7 @@ while IFS= read -r line; do
   echo "[colony-agent] <<< done"
 done
 ''';
-    return script.split('\n').map((l) => l.trim()).where((l) => l.isNotEmpty).join('; ');
+    return script.split('\n').map((line) => line.trim()).where((line) => line.isNotEmpty).join('; ');
   }
 
   String _remoteBashAgentClaude() {
@@ -223,88 +285,425 @@ while IFS= read -r line; do
   echo "[colony-agent] <<< done"
 done
 ''';
-    return script.split('\n').map((l) => l.trim()).where((l) => l.isNotEmpty).join('; ');
+    return script.split('\n').map((line) => line.trim()).where((line) => line.isNotEmpty).join('; ');
   }
 
-  Project get localProject => projects.firstWhere((p) => p.nodeId == 'local');
+  Project get localProject => projects.firstWhere((project) => project.nodeId == 'local');
 
   void moveProject(String projectId, double dx, double dy) {
-    final idx = projects.indexWhere((p) => p.id == projectId);
-    if (idx < 0) return;
-    projects[idx].x += dx;
-    projects[idx].y += dy;
+    final index = projects.indexWhere((project) => project.id == projectId);
+    if (index < 0) return;
+    final next = projects[index];
+    next.x += dx;
+    next.y += dy;
     notifyListeners();
   }
 
   void moveSession(String address, double dx, double dy) {
-    final idx = sessions.indexWhere((s) => s.address == address);
-    if (idx < 0) return;
-    sessions[idx].x += dx;
-    sessions[idx].y += dy;
+    final index = sessions.indexWhere((session) => session.address == address);
+    if (index < 0) return;
+    final next = sessions[index];
+    next.x += dx;
+    next.y += dy;
+
+    final taskId = _taskIdForAddress(address);
+    if (taskId != null) {
+      final task = store.sessionTasksById[taskId];
+      if (task != null) {
+        final worker = store.workersById[task.workerId];
+        if (worker != null) {
+          store.upsertWorker(worker.copyWith(metadata: {
+            ...worker.metadata,
+            'x': next.x,
+            'y': next.y,
+          }));
+        }
+      }
+    }
+
     notifyListeners();
   }
 
-  void _startStreaming(String address) {
+  Project? projectById(String id) => projects.where((project) => project.id == id).firstOrNull;
+
+  Session? sessionByAddress(String address) => sessions.where((session) => session.address == address).firstOrNull;
+
+  String nodeIdForProjectId(String projectId) {
+    final project = projectById(projectId);
+    return project?.nodeId ?? 'local';
+  }
+
+  Future<void> addRemoteHost(String host, {String? password}) async {
+    final normalized = host.trim();
+    if (normalized.isEmpty) return;
+    if (password != null && password.isNotEmpty) {
+      _sshPasswordByHost[normalized] = password;
+    }
+
+    final existingWorld = store.worldsById[normalized];
+    if (existingWorld == null) {
+      store.upsertWorld(
+        World(
+          id: normalized,
+          kind: WorldKind.ssh,
+          name: normalized,
+          connectionState: WorldConnectionState.connecting,
+          metadata: const {'source': 'ssh'},
+        ),
+      );
+    }
+
+    _ensureWorldScaffold(
+      normalized,
+      displayName: normalized,
+      kind: WorldKind.ssh,
+      townHallPosition: const WorldPosition(x: 7, y: 2),
+    );
+
+    _syncProjectsFromStore();
+    await refresh();
+  }
+
+  Map<String, String> _envForTarget(String target) {
+    if (target == 'local') return const {};
+    final password = _sshPasswordByHost[target];
+    if (password == null || password.isEmpty) return const {};
+    return {'COLONY_SSH_PASSWORD': password};
+  }
+
+  Map<String, String> _envForAddress(String address) {
+    final parsed = _parseAddress(address);
+    if (parsed == null) return const {};
+    final (nodeId, _) = parsed;
+    if (nodeId == 'local') return const {};
+    final password = _sshPasswordByHost[nodeId];
+    if (password == null || password.isEmpty) return const {};
+    return {'COLONY_SSH_PASSWORD': password};
+  }
+
+  @override
+  void dispose() {
+    store.removeListener(_onStoreChanged);
+    _stopStreaming();
+    super.dispose();
+  }
+
+  void _onStoreChanged() {
+    lastError = store.runtime.lastError;
+    final snapshot = store.runtime.backendSnapshot;
+    if (snapshot.isNotEmpty) {
+      codexRateLimit = Map<String, dynamic>.from(snapshot);
+    }
+    notifyListeners();
+  }
+
+  void _syncProjectsFromStore() {
+    final previousByNode = {
+      for (final project in projects) project.nodeId: project,
+    };
+
+    final nextProjects = <Project>[];
+    final sortedWorlds = store.worlds.toList()
+      ..sort((a, b) {
+        if (a.id == 'local') return -1;
+        if (b.id == 'local') return 1;
+        return a.name.compareTo(b.name);
+      });
+
+    for (var index = 0; index < sortedWorlds.length; index++) {
+      final world = sortedWorlds[index];
+      final existing = previousByNode[world.id];
+      if (existing != null) {
+        nextProjects.add(existing);
+        continue;
+      }
+
+      final isLocal = world.id == 'local';
+      nextProjects.add(
+        Project(
+          id: 'p_${world.id}',
+          nodeId: world.id,
+          name: world.name,
+          x: isLocal ? 1.0 : (1.0 + index * 6.5),
+          y: isLocal ? 1.0 : (1.0 + index * 2.6),
+        ),
+      );
+    }
+
+    projects
+      ..clear()
+      ..addAll(nextProjects);
+  }
+
+  void _syncSessionTasks(List<String> addresses) {
+    final activeTaskIds = <String>{};
+
+    for (final address in addresses) {
+      final parsed = _parseAddress(address);
+      if (parsed == null) continue;
+
+      final (nodeId, sessionName) = parsed;
+      _ensureWorldScaffold(
+        nodeId,
+        displayName: nodeId == 'local' ? 'Local' : nodeId,
+        kind: nodeId == 'local' ? WorldKind.local : WorldKind.ssh,
+        townHallPosition: const WorldPosition(x: 0, y: 0),
+      );
+
+      final taskId = _sessionTaskIdByAddress[address] ??= 'task:$address';
+      activeTaskIds.add(taskId);
+
+      final kind = _inferKind(sessionName);
+      final provider = _providerForSessionKind(kind);
+      final hutId = _hutIdForProvider(nodeId, provider);
+      final workerId = 'worker:$address';
+      final workerPos = _positionForAddress(address, nodeId: nodeId, name: sessionName);
+
+      final currentWorker = store.workersById[workerId];
+      store.upsertWorker(
+        (currentWorker ??
+                Worker(
+                  id: workerId,
+                  worldId: nodeId,
+                  provider: provider,
+                  homeBuildingId: hutId,
+                ))
+            .copyWith(
+          assignedBuildingId: hutId,
+          sessionTaskId: taskId,
+          status: WorkerStatus.working,
+          metadata: {
+            ...(currentWorker?.metadata ?? const {}),
+            'x': workerPos.$1,
+            'y': workerPos.$2,
+          },
+        ),
+      );
+
+      final backend = nodeId == 'local' ? SessionBackend.localTmux : SessionBackend.sshTmux;
+      final currentTask = store.sessionTasksById[taskId];
+      store.upsertSessionTask(
+        (currentTask ??
+                SessionTask(
+                  id: taskId,
+                  workerId: workerId,
+                  address: address,
+                  backend: backend,
+                  title: sessionName,
+                ))
+            .copyWith(
+          workerId: workerId,
+          address: address,
+          backend: backend,
+          title: sessionName,
+          status: SessionTaskStatus.running,
+          startedAt: currentTask?.startedAt ?? DateTime.now(),
+          metadata: {
+            ...(currentTask?.metadata ?? const {}),
+            'nodeId': nodeId,
+            'sessionKind': kind.name,
+          },
+        ),
+      );
+    }
+
+    final staleTaskIds = store.sessionTasksById.keys.where((taskId) => !activeTaskIds.contains(taskId)).toList();
+    for (final taskId in staleTaskIds) {
+      final task = store.sessionTasksById.remove(taskId);
+      if (task != null) {
+        store.workersById.remove(task.workerId);
+      }
+      _logStreamsByTaskId.remove(taskId)?.stop();
+    }
+
+    final activeLogs = Map<String, List<String>>.from(store.runtime.liveLogsBySessionTaskId);
+    activeLogs.removeWhere((taskId, _) => !activeTaskIds.contains(taskId));
+    _sessionTaskIdByAddress.removeWhere((address, taskId) => !activeTaskIds.contains(taskId));
+    store.patchRuntime(
+      liveLogsBySessionTaskId: activeLogs,
+      lastError: lastError,
+    );
+  }
+
+  void _ensureWorldScaffold(
+    String worldId, {
+    required String displayName,
+    required WorldKind kind,
+    required WorldPosition townHallPosition,
+  }) {
+    final world = store.worldsById[worldId];
+    if (world == null) {
+      store.upsertWorld(
+        World(
+          id: worldId,
+          kind: kind,
+          name: displayName,
+          connectionState: kind == WorldKind.local ? WorldConnectionState.connected : WorldConnectionState.connecting,
+        ),
+      );
+    }
+
+    final townHallId = '$worldId:town-hall';
+    if (!store.buildingsById.containsKey(townHallId)) {
+      store.upsertBuilding(
+        Building(
+          id: townHallId,
+          worldId: worldId,
+          type: BuildingType.townHall,
+          name: worldId == 'local' ? 'Town Hall' : '$displayName Keep',
+          position: townHallPosition,
+          status: BuildingStatus.active,
+        ),
+      );
+    }
+
+    final zoneId = '$worldId:zone:default';
+    if (!store.zonesById.containsKey(zoneId)) {
+      store.upsertZone(
+        Zone(
+          id: zoneId,
+          worldId: worldId,
+          label: worldId == 'local' ? 'Village Core' : '$displayName Frontier',
+          bounds: const ZoneBounds(x: -4, y: -3, width: 8, height: 6),
+          status: ZoneStatus.active,
+        ),
+      );
+    }
+
+    _ensureHut(worldId, AgentProvider.codex, const WorldPosition(x: 2, y: 1));
+    _ensureHut(worldId, AgentProvider.claude, const WorldPosition(x: -2, y: 1));
+  }
+
+  void _ensureHut(String worldId, AgentProvider provider, WorldPosition position) {
+    final buildingId = _hutIdForProvider(worldId, provider);
+    if (store.buildingsById.containsKey(buildingId)) return;
+    store.upsertBuilding(
+      Building(
+        id: buildingId,
+        worldId: worldId,
+        type: BuildingType.agentHut,
+        name: switch (provider) {
+          AgentProvider.codex => 'Codex Hut',
+          AgentProvider.claude => 'Claude Hut',
+          AgentProvider.openclaw => 'OpenClaw Hut',
+          AgentProvider.other => 'Agent Hut',
+          AgentProvider.none => 'Empty Hut',
+        },
+        position: position,
+        status: BuildingStatus.available,
+        provider: provider,
+      ),
+    );
+  }
+
+  void _startStreamingForTask(String taskId, String address) {
     _stopStreaming();
     final cli = _cli;
     if (cli == null) return;
-    startLogStream(cli, address, env: _envForAddress(address)).then((ls) {
-      _activeLogStream = ls;
-      ls.lines.listen((line) {
-        final buf = _sessionLogs.putIfAbsent(address, () => <String>[]);
-        buf.add(line);
-        if (buf.length > 2000) {
-          buf.removeRange(0, buf.length - 2000);
+
+    cli.startLogStream(address, env: _envForAddress(address)).then((stream) {
+      _logStreamsByTaskId[taskId] = stream;
+      stream.lines.listen((line) {
+        final currentLogs = Map<String, List<String>>.from(store.runtime.liveLogsBySessionTaskId);
+        final buffer = List<String>.from(currentLogs[taskId] ?? const <String>[])..add(line);
+        if (buffer.length > 2000) {
+          buffer.removeRange(0, buffer.length - 2000);
         }
-        notifyListeners();
+        currentLogs[taskId] = buffer;
+        _sessionLogs[address] = buffer;
+        store.patchRuntime(
+          liveLogsBySessionTaskId: currentLogs,
+          lastError: lastError,
+        );
       });
-    }).catchError((e) {
-      lastError = '$e';
+    }).catchError((Object error) {
+      lastError = '$error';
+      store.patchRuntime(lastError: lastError);
       notifyListeners();
     });
   }
 
   void _stopStreaming() {
-    _activeLogStream?.stop();
-    _activeLogStream = null;
+    for (final stream in _logStreamsByTaskId.values) {
+      stream.stop();
+    }
+    _logStreamsByTaskId.clear();
+  }
+
+  void _pruneStreamsForMissingTasks() {
+    final validTaskIds = store.sessionTasksById.keys.toSet();
+    final staleTaskIds = _logStreamsByTaskId.keys.where((taskId) => !validTaskIds.contains(taskId)).toList();
+    for (final taskId in staleTaskIds) {
+      _logStreamsByTaskId.remove(taskId)?.stop();
+    }
   }
 
   List<Session> _sessionsFromAddresses(List<String> addresses) {
-    // Layout: scatter sessions around each node's base by stable hashing.
-    final out = <Session>[];
-    for (final a in addresses) {
-      final parsed = _parseAddress(a);
+    final output = <Session>[];
+    for (final address in addresses) {
+      final parsed = _parseAddress(address);
       if (parsed == null) continue;
-      final (node, name) = parsed;
-      final base = _projectForNode(node);
-      final h = name.codeUnits.fold<int>(0, (acc, v) => (acc * 31 + v) & 0x7fffffff);
-      final r = 1.8 + (h % 120) / 100.0;
-      final angle = (h % 360) * 3.1415926 / 180.0;
-      out.add(
+      final (nodeId, name) = parsed;
+      _projectForNode(nodeId);
+      final position = _positionForAddress(address, nodeId: nodeId, name: name);
+      output.add(
         Session(
-          node: NodeRef(node),
+          node: NodeRef(nodeId),
           name: name,
           kind: _inferKind(name),
-          x: base.x + r * math.cos(angle),
-          y: base.y + r * math.sin(angle),
-          status: SessionStatus.unknown,
+          x: position.$1,
+          y: position.$2,
+          status: SessionStatus.running,
         ),
       );
     }
-    return out;
+    return output;
   }
 
   SessionKind _inferKind(String name) {
-    final n = name.toLowerCase();
-    if (n.contains('codex')) return SessionKind.codex;
-    if (n.contains('claude')) return SessionKind.claude;
+    final normalized = name.toLowerCase();
+    if (normalized.contains('codex')) return SessionKind.codex;
+    if (normalized.contains('claude')) return SessionKind.claude;
     return SessionKind.generic;
   }
 
-  (String, String)? _parseAddress(String s) {
-    // "@local:foo" or "@host:foo"
-    if (!s.startsWith('@')) return null;
-    final body = s.substring(1);
+  AgentProvider _providerForSessionKind(SessionKind kind) {
+    return switch (kind) {
+      SessionKind.codex => AgentProvider.codex,
+      SessionKind.claude => AgentProvider.claude,
+      SessionKind.generic => AgentProvider.other,
+    };
+  }
+
+  String _hutIdForProvider(String worldId, AgentProvider provider) {
+    final suffix = switch (provider) {
+      AgentProvider.codex => 'codex',
+      AgentProvider.claude => 'claude',
+      AgentProvider.openclaw => 'openclaw',
+      AgentProvider.other => 'other',
+      AgentProvider.none => 'none',
+    };
+    return '$worldId:hut:$suffix';
+  }
+
+  (double, double) _positionForAddress(
+    String address, {
+    required String nodeId,
+    required String name,
+  }) {
+    final base = _projectForNode(nodeId);
+    final hash = address.codeUnits.fold<int>(0, (acc, value) => (acc * 31 + value) & 0x7fffffff);
+    final radius = 1.8 + (hash % 120) / 100.0;
+    final angle = (hash % 360) * math.pi / 180.0;
+    return (
+      base.x + radius * math.cos(angle),
+      base.y + radius * math.sin(angle),
+    );
+  }
+
+  (String, String)? _parseAddress(String value) {
+    if (!value.startsWith('@')) return null;
+    final body = value.substring(1);
     final idx = body.indexOf(':');
     if (idx < 0) return null;
     final node = body.substring(0, idx);
@@ -314,64 +713,26 @@ done
   }
 
   Project _projectForNode(String nodeId) {
-    final existing = projects.where((p) => p.nodeId == nodeId).toList();
-    if (existing.isNotEmpty) return existing.first;
+    final existing = projects.where((project) => project.nodeId == nodeId).firstOrNull;
+    if (existing != null) return existing;
 
-    // Create a new base for this node with a deterministic, non-overlapping placement.
-    final i = projects.length;
-    final local = localProject;
-    final p = Project(
+    final local = projects.firstWhere(
+      (project) => project.nodeId == 'local',
+      orElse: () => Project(id: 'p_local', nodeId: 'local', name: 'Local', x: 1.0, y: 1.0),
+    );
+    final index = projects.length;
+    final project = Project(
       id: 'p_${nodeId.hashCode}',
       nodeId: nodeId,
       name: nodeId == 'local' ? 'Local' : nodeId,
-      x: local.x + 7.0 + (i - 1) * 6.5,
-      y: local.y + 1.5 + (i - 1) * 2.6,
+      x: local.x + 7.0 + (index - 1) * 6.5,
+      y: local.y + 1.5 + (index - 1) * 2.6,
     );
-    projects.add(p);
-    return p;
+    projects.add(project);
+    return project;
   }
 
-  Project? projectById(String id) => projects.where((p) => p.id == id).firstOrNull;
-
-  Session? sessionByAddress(String address) => sessions.where((s) => s.address == address).firstOrNull;
-
-  String nodeIdForProjectId(String projectId) {
-    final p = projectById(projectId);
-    return p?.nodeId ?? 'local';
-  }
-
-  Map<String, String> _envForTarget(String target) {
-    if (target == 'local') return const {};
-    final pw = _sshPasswordByHost[target];
-    if (pw == null || pw.isEmpty) return const {};
-    return {'COLONY_SSH_PASSWORD': pw};
-  }
-
-  Map<String, String> _envForAddress(String address) {
-    final parsed = _parseAddress(address);
-    if (parsed == null) return const {};
-    final (nodeId, _) = parsed;
-    if (nodeId == 'local') return const {};
-    final pw = _sshPasswordByHost[nodeId];
-    if (pw == null || pw.isEmpty) return const {};
-    return {'COLONY_SSH_PASSWORD': pw};
-  }
-
-  Future<void> addRemoteHost(String host, {String? password}) async {
-    final h = host.trim();
-    if (h.isEmpty) return;
-    if (password != null && password.isNotEmpty) {
-      _sshPasswordByHost[h] = password;
-    }
-    _projectForNode(h);
-    await refresh();
-  }
-
-  @override
-  void dispose() {
-    _stopStreaming();
-    super.dispose();
-  }
+  String? _taskIdForAddress(String address) => _sessionTaskIdByAddress[address];
 }
 
 extension _FirstOrNull<T> on Iterable<T> {
