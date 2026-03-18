@@ -11,6 +11,11 @@ abstract class ColonyCommandAdapter {
     Map<String, String>? env,
   });
 
+  Future<List<String>> listProviders({
+    String target = 'local',
+    Map<String, String>? env,
+  });
+
   Future<void> startSession(
     String address,
     List<String> command, {
@@ -56,6 +61,21 @@ class ProcessColonyCommandAdapter implements ColonyCommandAdapter {
     final res = await Process.run(binPath, ['list', target], environment: env);
     if (res.exitCode != 0) {
       throw Exception('colony list failed: ${res.stderr}');
+    }
+    final out = (res.stdout as String).trim();
+    if (out.isEmpty) return [];
+    return out.split('\n').map((line) => line.trim()).where((line) => line.isNotEmpty).toList();
+  }
+
+  @override
+  Future<List<String>> listProviders({
+    String target = 'local',
+    Map<String, String>? env,
+  }) async {
+    final args = <String>['providers', target];
+    final res = await Process.run(binPath, args, environment: env);
+    if (res.exitCode != 0) {
+      throw Exception('colony providers failed: ${res.stderr}');
     }
     final out = (res.stdout as String).trim();
     if (out.isEmpty) return [];

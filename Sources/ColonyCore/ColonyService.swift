@@ -2,9 +2,11 @@ import Foundation
 
 public struct ColonyService {
     private let tmux: Tmux
+    private let environmentProbe: EnvironmentProbe
 
-    public init(tmux: Tmux = Tmux()) {
+    public init(tmux: Tmux = Tmux(), environmentProbe: EnvironmentProbe = EnvironmentProbe()) {
         self.tmux = tmux
+        self.environmentProbe = environmentProbe
     }
 
     public func start(address: Address, command: [String]) throws {
@@ -33,6 +35,10 @@ public struct ColonyService {
 
     public func list(target: Target) throws -> [String] {
         try tmux.listSessions(target: target)
+    }
+
+    public func providers(target: Target) throws -> [String] {
+        try environmentProbe.availableAgents(target: target)
     }
 
     public func attach(address: Address) throws -> Never {

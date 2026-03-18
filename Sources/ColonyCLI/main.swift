@@ -19,6 +19,7 @@ struct Usage {
           colony agent  <codex|claude> [--model MODEL]
           colony codex-rate-limit [--json]
           colony list   [local|<sshHostAlias>]
+          colony providers [local|<sshHostAlias>] [--json]
           colony attach <@addr>
 
         Address forms:
@@ -418,6 +419,31 @@ do {
         }
         let sessions = try svc.list(target: t)
         for s in sessions { print("@\(t.displayName):\(s)") }
+
+    case "providers":
+        var t: Target = .local
+        var json = false
+        while let arg = args.first {
+            if arg == "--json" {
+                json = true
+                args = args.dropFirst()
+            } else {
+                args = args.dropFirst()
+                if arg == "local" { t = .local }
+                else { t = .ssh(host: arg) }
+            }
+        }
+
+        let providers = try svc.providers(target: t)
+        if json {
+            let enc = JSONEncoder()
+            enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+            let data = try enc.encode(providers)
+            guard let s = String(data: data, encoding: .utf8) else { throw CLIError.invalid("failed to encode json") }
+            print(s)
+        } else {
+            for p in providers { print(p) }
+        }
 
     case "attach":
         let addr = try Address.parse(try pop(&args, name: "@addr"))

@@ -15,6 +15,7 @@ class ProjectDrawer extends StatelessWidget {
     final p = state.projectById(projectId) ?? state.projects.first;
     final nodeId = p.nodeId;
     final nodeSessions = state.sessions.where((s) => s.node.id == nodeId).toList(growable: false);
+    final availableKinds = state.sessionKindsForNode(nodeId);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -31,7 +32,7 @@ class ProjectDrawer extends StatelessWidget {
             const SizedBox(width: 8),
             _AddRemoteButton(state: state),
             const SizedBox(width: 8),
-            _NewWorkerButton(state: state, nodeId: nodeId),
+            _NewWorkerButton(state: state, nodeId: nodeId, availableKinds: availableKinds),
           ],
         ),
         const SizedBox(height: 14),
@@ -58,6 +59,7 @@ class _SessionRow extends StatelessWidget {
     final kind = switch (s.kind) {
       SessionKind.codex => 'codex',
       SessionKind.claude => 'claude',
+      SessionKind.openclaw => 'openclaw',
       SessionKind.generic => 'agent',
     };
     return InkWell(
@@ -86,7 +88,8 @@ class _SessionRow extends StatelessWidget {
 class _NewWorkerButton extends StatelessWidget {
   final AppState state;
   final String nodeId;
-  const _NewWorkerButton({required this.state, required this.nodeId});
+  final List<SessionKind> availableKinds;
+  const _NewWorkerButton({required this.state, required this.nodeId, required this.availableKinds});
 
   @override
   Widget build(BuildContext context) {
@@ -94,7 +97,11 @@ class _NewWorkerButton extends StatelessWidget {
       onPressed: () async {
         final res = await showDialog<NewSessionResult>(
           context: context,
-          builder: (context) => const NewSessionDialog(),
+          builder: (context) => NewSessionDialog(
+            allowedKinds: availableKinds,
+            initialKind: availableKinds.first,
+            nodeId: nodeId,
+          ),
         );
         if (res == null) return;
         await state.startNewSession(res.kind, res.name, model: res.model, nodeId: nodeId);

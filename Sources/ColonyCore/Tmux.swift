@@ -126,11 +126,11 @@ public struct Tmux {
                         "/usr/bin/env", "sshpass", "-p", pw,
                         "ssh",
                         "-o", "StrictHostKeyChecking=accept-new",
-                        "-T", host, "bash", "-lc", remote
+                        "-T", host, remote
                     ])
                 }
             }
-            return try shell.run(["/usr/bin/ssh", "-o", "StrictHostKeyChecking=accept-new", "-T", host, "bash", "-lc", remote])
+            return try shell.run(["/usr/bin/ssh", "-o", "StrictHostKeyChecking=accept-new", "-T", host, remote])
         }
     }
 }

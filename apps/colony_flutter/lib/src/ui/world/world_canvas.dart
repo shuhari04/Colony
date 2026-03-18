@@ -3,6 +3,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 
 import '../../design/tokens.dart';
+import '../../domain/colony_domain.dart';
 import '../../model/entities.dart';
 import '../../state/app_state.dart';
 import '../dialogs/new_session_dialog.dart';
@@ -102,7 +103,7 @@ class _WorldCanvasState extends State<WorldCanvas> {
                     ),
                   ),
                   for (final p in state.projects) _buildProjectWidget(p),
-                  for (final p in state.projects) _buildHutWidget(p),
+                  for (final p in state.projects) ..._buildHutWidgets(p),
                   for (final s in state.sessions) _buildSessionWidget(s),
                   if (state.lastError != null) _buildError(state.lastError!),
                 ],
@@ -151,34 +152,55 @@ class _WorldCanvasState extends State<WorldCanvas> {
     );
   }
 
-  Widget _buildHutWidget(Project base) {
+  List<Widget> _buildHutWidgets(Project base) {
     final state = widget.state;
-    final pos = _isoToScreen(base.x - 1.4, base.y + 1.2);
-    return Positioned(
-      left: pos.dx - 70,
-      top: pos.dy - 88,
-      width: 140,
-      height: 130,
-      child: _IsoCubeTile(
-        label: 'Hut',
-        sublabel: '+ new agent',
-        accent: ColonyColors.success,
-        selected: false,
-        icon: Icons.add,
-        showDragBadge: state.buildMode,
-        onTap: () async {
-          if (state.buildMode) return;
-          final res = await showDialog<NewSessionResult>(
-            context: context,
-            builder: (context) => const NewSessionDialog(),
+    final providers = state.providersForNode(base.nodeId);
+    const offsets = <(double, double)>[
+      (-1.4, 1.2),
+      (1.3, 1.2),
+      (-0.2, 2.0),
+      (2.0, 2.0),
+    ];
+
+    return [
+      for (var index = 0; index < providers.length; index++)
+        () {
+          final provider = providers[index];
+          final kind = state.sessionKindForProvider(provider);
+          final offset = offsets[index % offsets.length];
+          final pos = _isoToScreen(base.x + offset.$1, base.y + offset.$2);
+          return Positioned(
+            left: pos.dx - 70,
+            top: pos.dy - 88,
+            width: 140,
+            height: 130,
+            child: _IsoCubeTile(
+              label: state.hutLabelForProvider(provider),
+              sublabel: '+ new ${state.providerLabel(provider)}',
+              accent: _providerColor(provider),
+              selected: false,
+              icon: _providerIcon(provider),
+              showDragBadge: state.buildMode,
+              onTap: () async {
+                if (state.buildMode) return;
+                final res = await showDialog<NewSessionResult>(
+                  context: context,
+                  builder: (context) => NewSessionDialog(
+                    allowedKinds: state.sessionKindsForNode(base.nodeId),
+                    initialKind: kind,
+                    initialName: state.defaultSessionNameFor(kind),
+                    nodeId: base.nodeId,
+                  ),
+                );
+                if (res == null) return;
+                await state.startNewSession(res.kind, res.name, model: res.model, nodeId: base.nodeId);
+              },
+              onLongPress: () => state.toggleBuildMode(true),
+              onDragUpdate: (_) {},
+            ),
           );
-          if (res == null) return;
-          await state.startNewSession(res.kind, res.name, model: res.model, nodeId: base.nodeId);
-        },
-        onLongPress: () => state.toggleBuildMode(true),
-        onDragUpdate: (_) {},
-      ),
-    );
+        }(),
+    ];
   }
 
   Widget _buildSessionWidget(Session s) {
@@ -188,6 +210,7 @@ class _WorldCanvasState extends State<WorldCanvas> {
     final c = switch (s.kind) {
       SessionKind.codex => ColonyColors.accentCyan,
       SessionKind.claude => ColonyColors.info,
+      SessionKind.openclaw => ColonyColors.success,
       SessionKind.generic => ColonyColors.text1,
     };
 
@@ -198,7 +221,12 @@ class _WorldCanvasState extends State<WorldCanvas> {
       height: 120,
       child: _IsoCubeTile(
         label: s.name,
-        sublabel: s.kind == SessionKind.codex ? 'codex' : (s.kind == SessionKind.claude ? 'claude' : 'agent'),
+        sublabel: switch (s.kind) {
+          SessionKind.codex => 'codex',
+          SessionKind.claude => 'claude',
+          SessionKind.openclaw => 'openclaw',
+          SessionKind.generic => 'agent',
+        },
         accent: c,
         selected: selected,
         showDragBadge: state.buildMode,
@@ -214,6 +242,24 @@ class _WorldCanvasState extends State<WorldCanvas> {
         },
       ),
     );
+  }
+
+  Color _providerColor(AgentProvider provider) {
+    return switch (provider) {
+      AgentProvider.codex => ColonyColors.accentCyan,
+      AgentProvider.claude => ColonyColors.info,
+      AgentProvider.openclaw => ColonyColors.success,
+      AgentProvider.other || AgentProvider.none => ColonyColors.text1,
+    };
+  }
+
+  IconData _providerIcon(AgentProvider provider) {
+    return switch (provider) {
+      AgentProvider.codex => Icons.memory_outlined,
+      AgentProvider.claude => Icons.auto_awesome_outlined,
+      AgentProvider.openclaw => Icons.cruelty_free_outlined,
+      AgentProvider.other || AgentProvider.none => Icons.add,
+    };
   }
 
   Widget _buildError(String msg) {

@@ -37,9 +37,11 @@ class AppState extends ChangeNotifier {
   final List<Project> projects = [];
   final List<Session> sessions = [];
   final Map<String, String> _sshPasswordByHost = {};
+  final Map<String, List<AgentProvider>> _providersByNode = {};
   final Map<String, List<String>> _sessionLogs = {};
   final Map<String, ColonyLogStream> _logStreamsByTaskId = {};
   final Map<String, String> _sessionTaskIdByAddress = {};
+  final Map<String, SessionKind> _sessionKindHintsByAddress = {};
 
   bool buildMode = false;
   Selection selection = const Selection.none();
@@ -61,6 +63,7 @@ class AppState extends ChangeNotifier {
     lastError = null;
     notifyListeners();
     try {
+      await _refreshProviders();
       await _refreshSessions();
       await _refreshRateLimit();
     } catch (e) {
@@ -88,6 +91,41 @@ class AppState extends ChangeNotifier {
 
     _syncSessionTasks(addresses);
     _pruneStreamsForMissingTasks();
+  }
+
+  Future<void> _refreshProviders() async {
+    final cli = _cli;
+    if (cli == null) return;
+
+    final nextProviders = <String, List<AgentProvider>>{};
+    final targets = <String>{'local', ...projects.map((project) => project.nodeId)};
+    for (final target in targets) {
+      final env = _envForTarget(target);
+      try {
+        final listed = await cli.listProviders(target: target, env: env);
+        final providers = listed.map(_providerFromName).where((provider) => provider != null).cast<AgentProvider>().toList();
+        nextProviders[target] = _normalizedProviders(providers, target: target);
+        _setWorldConnectionState(target, WorldConnectionState.connected);
+      } catch (e) {
+        nextProviders[target] = _fallbackProvidersForTarget(target);
+        if (target != 'local') {
+          _setWorldConnectionState(target, WorldConnectionState.degraded, error: '$e');
+        }
+      }
+    }
+
+    _providersByNode
+      ..clear()
+      ..addAll(nextProviders);
+
+    for (final entry in nextProviders.entries) {
+      _ensureWorldScaffold(
+        entry.key,
+        displayName: entry.key == 'local' ? 'Local' : entry.key,
+        kind: entry.key == 'local' ? WorldKind.local : WorldKind.ssh,
+        townHallPosition: const WorldPosition(x: 0, y: 0),
+      );
+    }
   }
 
   Future<void> _refreshRateLimit() async {
@@ -204,6 +242,7 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     try {
       await cli.startSession(addr, cmd, env: _envForAddress(addr));
+      _sessionKindHintsByAddress[addr] = kind;
       await _refreshSessions();
       final session = sessions.firstWhere(
         (candidate) => candidate.address == addr,
@@ -228,6 +267,12 @@ class AppState extends ChangeNotifier {
       return switch (kind) {
         SessionKind.codex => <String>[colonyBin, 'agent', 'codex', '--model', codexModel],
         SessionKind.claude => <String>[colonyBin, 'agent', 'claude'],
+        SessionKind.openclaw => <String>[
+            '/usr/bin/env',
+            'bash',
+            '-lc',
+            _bashAgentOpenClaw(),
+          ],
         SessionKind.generic => <String>['/usr/bin/env', 'bash', '-lc', 'cat'],
       };
     }
@@ -245,8 +290,31 @@ class AppState extends ChangeNotifier {
           '-lc',
           _remoteBashAgentClaude(),
         ],
+      SessionKind.openclaw => <String>[
+          '/usr/bin/env',
+          'bash',
+          '-lc',
+          _bashAgentOpenClaw(),
+        ],
       SessionKind.generic => <String>['/usr/bin/env', 'bash', '-lc', 'cat'],
     };
+  }
+
+  String _bashAgentOpenClaw() {
+    final script = r'''
+set -euo pipefail
+AGENT_ID="$(openclaw agents list 2>/dev/null | awk '/^- /{print $2; exit}')"
+AGENT_ID="${AGENT_ID:-main}"
+echo "[colony-agent] openclaw ready (agent=$AGENT_ID)"
+while IFS= read -r line; do
+  line="$(printf "%s" "$line" | tr -d '\r')"
+  [ -z "$line" ] && continue
+  echo "[colony-agent] >>> $line"
+  openclaw agent --local --agent "$AGENT_ID" --json -m "$line" 2>&1
+  echo "[colony-agent] <<< done"
+done
+''';
+    return script.split('\n').map((line) => line.trim()).where((line) => line.isNotEmpty).join('; ');
   }
 
   String _remoteBashAgentCodex({required String model}) {
@@ -289,6 +357,56 @@ done
   }
 
   Project get localProject => projects.firstWhere((project) => project.nodeId == 'local');
+
+  List<AgentProvider> providersForNode(String nodeId) {
+    return List<AgentProvider>.from(_providersByNode[nodeId] ?? _fallbackProvidersForTarget(nodeId));
+  }
+
+  List<SessionKind> sessionKindsForNode(String nodeId) {
+    final kinds = providersForNode(nodeId)
+        .map(sessionKindForProvider)
+        .where((kind) => kind != SessionKind.generic)
+        .toList(growable: false);
+    return kinds.isEmpty ? const [SessionKind.codex, SessionKind.claude] : kinds;
+  }
+
+  SessionKind sessionKindForProvider(AgentProvider provider) {
+    return switch (provider) {
+      AgentProvider.codex => SessionKind.codex,
+      AgentProvider.claude => SessionKind.claude,
+      AgentProvider.openclaw => SessionKind.openclaw,
+      AgentProvider.other || AgentProvider.none => SessionKind.generic,
+    };
+  }
+
+  String providerLabel(AgentProvider provider) {
+    return switch (provider) {
+      AgentProvider.codex => 'codex',
+      AgentProvider.claude => 'claude',
+      AgentProvider.openclaw => 'openclaw',
+      AgentProvider.other => 'agent',
+      AgentProvider.none => 'empty',
+    };
+  }
+
+  String hutLabelForProvider(AgentProvider provider) {
+    return switch (provider) {
+      AgentProvider.codex => 'Codex Hut',
+      AgentProvider.claude => 'Claude Hut',
+      AgentProvider.openclaw => 'OpenClaw Hut',
+      AgentProvider.other => 'Agent Hut',
+      AgentProvider.none => 'Empty Hut',
+    };
+  }
+
+  String defaultSessionNameFor(SessionKind kind) {
+    return switch (kind) {
+      SessionKind.codex => 'codex1',
+      SessionKind.claude => 'claude1',
+      SessionKind.openclaw => 'openclaw1',
+      SessionKind.generic => 'agent1',
+    };
+  }
 
   void moveProject(String projectId, double dx, double dy) {
     final index = projects.indexWhere((project) => project.id == projectId);
@@ -361,6 +479,7 @@ done
     );
 
     _syncProjectsFromStore();
+    await _refreshProviders();
     await refresh();
   }
 
@@ -453,7 +572,7 @@ done
       final taskId = _sessionTaskIdByAddress[address] ??= 'task:$address';
       activeTaskIds.add(taskId);
 
-      final kind = _inferKind(sessionName);
+      final kind = _sessionKindHintsByAddress[address] ?? _inferKind(sessionName);
       final provider = _providerForSessionKind(kind);
       final hutId = _hutIdForProvider(nodeId, provider);
       final workerId = 'worker:$address';
@@ -570,28 +689,44 @@ done
       );
     }
 
-    _ensureHut(worldId, AgentProvider.codex, const WorldPosition(x: 2, y: 1));
-    _ensureHut(worldId, AgentProvider.claude, const WorldPosition(x: -2, y: 1));
+    final providers = providersForNode(worldId);
+    const hutPositions = <WorldPosition>[
+      WorldPosition(x: 2, y: 1),
+      WorldPosition(x: -2, y: 1),
+      WorldPosition(x: 0, y: 2.5),
+      WorldPosition(x: 3.5, y: 2.4),
+    ];
+
+    final desiredHutIds = <String>{};
+    for (var index = 0; index < providers.length; index++) {
+      final provider = providers[index];
+      final buildingId = _hutIdForProvider(worldId, provider);
+      desiredHutIds.add(buildingId);
+      _ensureHut(worldId, provider, hutPositions[index % hutPositions.length]);
+    }
+
+    final removableIds = store.buildingsById.values
+        .where((building) => building.worldId == worldId && building.type == BuildingType.agentHut)
+        .map((building) => building.id)
+        .where((buildingId) => !desiredHutIds.contains(buildingId))
+        .toList(growable: false);
+    for (final buildingId in removableIds) {
+      store.buildingsById.remove(buildingId);
+    }
   }
 
   void _ensureHut(String worldId, AgentProvider provider, WorldPosition position) {
     final buildingId = _hutIdForProvider(worldId, provider);
     if (store.buildingsById.containsKey(buildingId)) return;
     store.upsertBuilding(
-      Building(
-        id: buildingId,
-        worldId: worldId,
-        type: BuildingType.agentHut,
-        name: switch (provider) {
-          AgentProvider.codex => 'Codex Hut',
-          AgentProvider.claude => 'Claude Hut',
-          AgentProvider.openclaw => 'OpenClaw Hut',
-          AgentProvider.other => 'Agent Hut',
-          AgentProvider.none => 'Empty Hut',
-        },
-        position: position,
-        status: BuildingStatus.available,
-        provider: provider,
+        Building(
+          id: buildingId,
+          worldId: worldId,
+          type: BuildingType.agentHut,
+          name: hutLabelForProvider(provider),
+          position: position,
+          status: BuildingStatus.available,
+          provider: provider,
       ),
     );
   }
@@ -664,6 +799,7 @@ done
     final normalized = name.toLowerCase();
     if (normalized.contains('codex')) return SessionKind.codex;
     if (normalized.contains('claude')) return SessionKind.claude;
+    if (normalized.contains('openclaw') || normalized.contains('opencode')) return SessionKind.openclaw;
     return SessionKind.generic;
   }
 
@@ -671,8 +807,60 @@ done
     return switch (kind) {
       SessionKind.codex => AgentProvider.codex,
       SessionKind.claude => AgentProvider.claude,
+      SessionKind.openclaw => AgentProvider.openclaw,
       SessionKind.generic => AgentProvider.other,
     };
+  }
+
+  AgentProvider? _providerFromName(String raw) {
+    return switch (raw.trim().toLowerCase()) {
+      'codex' => AgentProvider.codex,
+      'claude' => AgentProvider.claude,
+      'openclaw' || 'opencode' => AgentProvider.openclaw,
+      'other' => AgentProvider.other,
+      '' => null,
+      _ => AgentProvider.other,
+    };
+  }
+
+  List<AgentProvider> _normalizedProviders(List<AgentProvider> providers, {required String target}) {
+    final next = <AgentProvider>[];
+    final seen = <AgentProvider>{};
+    for (final provider in providers) {
+      if (provider == AgentProvider.none) continue;
+      if (seen.add(provider)) {
+        next.add(provider);
+      }
+    }
+    if (target == 'local') {
+      for (final provider in const [AgentProvider.codex, AgentProvider.claude]) {
+        if (seen.add(provider)) {
+          next.add(provider);
+        }
+      }
+    }
+    return next.isEmpty ? _fallbackProvidersForTarget(target) : next;
+  }
+
+  List<AgentProvider> _fallbackProvidersForTarget(String target) {
+    if (target == 'local') {
+      return const [AgentProvider.codex, AgentProvider.claude];
+    }
+    return const [AgentProvider.codex];
+  }
+
+  void _setWorldConnectionState(String worldId, WorldConnectionState state, {String? error}) {
+    final world = store.worldsById[worldId];
+    if (world == null) return;
+    store.upsertWorld(
+      world.copyWith(
+        connectionState: state,
+        metadata: {
+          ...world.metadata,
+          'error': error,
+        },
+      ),
+    );
   }
 
   String _hutIdForProvider(String worldId, AgentProvider provider) {

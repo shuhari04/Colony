@@ -11,17 +11,35 @@ class NewSessionResult {
 }
 
 class NewSessionDialog extends StatefulWidget {
-  const NewSessionDialog({super.key});
+  final List<SessionKind> allowedKinds;
+  final SessionKind initialKind;
+  final String? initialName;
+  final String nodeId;
+
+  const NewSessionDialog({
+    super.key,
+    this.allowedKinds = const [SessionKind.codex, SessionKind.claude],
+    this.initialKind = SessionKind.codex,
+    this.initialName,
+    this.nodeId = 'local',
+  });
 
   @override
   State<NewSessionDialog> createState() => _NewSessionDialogState();
 }
 
 class _NewSessionDialogState extends State<NewSessionDialog> {
-  SessionKind _kind = SessionKind.codex;
-  final TextEditingController _name = TextEditingController(text: 'codex1');
+  late SessionKind _kind;
+  late final TextEditingController _name;
   final TextEditingController _model = TextEditingController(text: 'gpt-5.2');
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _kind = widget.allowedKinds.contains(widget.initialKind) ? widget.initialKind : widget.allowedKinds.first;
+    _name = TextEditingController(text: widget.initialName ?? _defaultNameFor(_kind));
+  }
 
   @override
   void dispose() {
@@ -43,14 +61,20 @@ class _NewSessionDialogState extends State<NewSessionDialog> {
           children: [
             DropdownButtonFormField<SessionKind>(
               initialValue: _kind,
-              items: const [
-                DropdownMenuItem(value: SessionKind.codex, child: Text('codex')),
-                DropdownMenuItem(value: SessionKind.claude, child: Text('claude')),
-              ],
+              items: widget.allowedKinds
+                  .map(
+                    (kind) => DropdownMenuItem(
+                      value: kind,
+                      child: Text(_kindLabel(kind)),
+                    ),
+                  )
+                  .toList(growable: false),
               onChanged: (v) => setState(() {
-                _kind = v ?? SessionKind.codex;
-                if (_kind == SessionKind.codex && _name.text.trim().isEmpty) _name.text = 'codex1';
-                if (_kind == SessionKind.claude && _name.text.trim().isEmpty) _name.text = 'claude1';
+                final previous = _kind;
+                _kind = v ?? widget.allowedKinds.first;
+                if (_name.text.trim().isEmpty || _name.text.trim() == _defaultNameFor(previous)) {
+                  _name.text = _defaultNameFor(_kind);
+                }
               }),
               decoration: const InputDecoration(labelText: 'Type'),
             ),
@@ -79,9 +103,7 @@ class _NewSessionDialogState extends State<NewSessionDialog> {
             Align(
               alignment: Alignment.centerLeft,
               child: Text(
-                _kind == SessionKind.codex
-                    ? 'Creates @local:<name> and starts: codex --model <model>'
-                    : 'Creates @local:<name> and starts: claude',
+                _descriptionForKind(_kind, widget.nodeId),
                 style: const TextStyle(fontSize: 11, color: ColonyColors.text1),
               ),
             ),
@@ -115,5 +137,33 @@ class _NewSessionDialogState extends State<NewSessionDialog> {
         ),
       ],
     );
+  }
+
+  String _kindLabel(SessionKind kind) {
+    return switch (kind) {
+      SessionKind.codex => 'codex',
+      SessionKind.claude => 'claude',
+      SessionKind.openclaw => 'openclaw',
+      SessionKind.generic => 'generic',
+    };
+  }
+
+  String _defaultNameFor(SessionKind kind) {
+    return switch (kind) {
+      SessionKind.codex => 'codex1',
+      SessionKind.claude => 'claude1',
+      SessionKind.openclaw => 'openclaw1',
+      SessionKind.generic => 'agent1',
+    };
+  }
+
+  String _descriptionForKind(SessionKind kind, String nodeId) {
+    final prefix = 'Creates @$nodeId:<name> and starts: ';
+    return switch (kind) {
+      SessionKind.codex => '${prefix}codex --model <model>',
+      SessionKind.claude => '${prefix}claude',
+      SessionKind.openclaw => '${prefix}openclaw agent',
+      SessionKind.generic => '${prefix}bash -lc cat',
+    };
   }
 }

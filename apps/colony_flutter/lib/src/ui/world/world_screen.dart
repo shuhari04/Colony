@@ -2,15 +2,18 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 
+import '../../bridge/bridge_server_controller.dart';
 import '../../design/tokens.dart';
 import '../../state/app_state.dart';
+import '../bridge/bridge_pairing_dialog.dart';
 import '../widgets/bottom_drawer.dart';
 import '../widgets/command_bar.dart';
 import 'world_canvas.dart';
 
 class WorldScreen extends StatefulWidget {
   final AppState state;
-  const WorldScreen({super.key, required this.state});
+  final BridgeServerController bridgeController;
+  const WorldScreen({super.key, required this.state, required this.bridgeController});
 
   @override
   State<WorldScreen> createState() => _WorldScreenState();
@@ -33,7 +36,7 @@ class _WorldScreenState extends State<WorldScreen> {
                 left: ColonySpacing.s4,
                 right: ColonySpacing.s4,
                 top: ColonySpacing.s4,
-                child: _TopBar(state: widget.state),
+                child: _TopBar(state: widget.state, bridgeController: widget.bridgeController),
               ),
 
               Positioned(
@@ -71,7 +74,8 @@ class _WorldScreenState extends State<WorldScreen> {
 
 class _TopBar extends StatelessWidget {
   final AppState state;
-  const _TopBar({required this.state});
+  final BridgeServerController bridgeController;
+  const _TopBar({required this.state, required this.bridgeController});
 
   @override
   Widget build(BuildContext context) {
@@ -95,6 +99,17 @@ class _TopBar extends StatelessWidget {
               ),
               const SizedBox(width: ColonySpacing.s2),
               _RateLimitChip(rateLimit: state.codexRateLimit),
+              const SizedBox(width: ColonySpacing.s2),
+              IconButton(
+                tooltip: 'Phone Pairing',
+                onPressed: () {
+                  showDialog<void>(
+                    context: context,
+                    builder: (context) => BridgePairingDialog(controller: bridgeController),
+                  );
+                },
+                icon: const Icon(Icons.phone_iphone, size: 18),
+              ),
               const SizedBox(width: ColonySpacing.s2),
               IconButton(
                 tooltip: 'Refresh',

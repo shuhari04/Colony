@@ -1,6 +1,6 @@
 enum EntityKind { building, unit }
 
-enum SessionKind { codex, claude, generic }
+enum SessionKind { codex, claude, openclaw, generic }
 
 enum SessionStatus { unknown, running, stopped, failed, throttled }
 
