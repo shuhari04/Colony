@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
+import 'bridge_discovery_channel.dart';
 import 'bridge_models.dart';
 
 class BridgeClientController extends ChangeNotifier {
@@ -13,11 +14,13 @@ class BridgeClientController extends ChangeNotifier {
   BridgeExecutionMode executionMode = BridgeExecutionMode.balanced;
 
   List<BridgeChatMessage> messages = const [];
+  List<DiscoveredBridge> discoveredBridges = const [];
   bool isRunning = false;
   String? sessionId;
   String? lastError;
   String? bannerText;
   String connectionLabel = 'Disconnected';
+  bool isDiscovering = false;
 
   Timer? _poller;
 
@@ -58,6 +61,30 @@ class BridgeClientController extends ChangeNotifier {
 
     lastError = 'Unsupported QR payload.';
     notifyListeners();
+  }
+
+  void applyDiscoveredBridge(DiscoveredBridge bridge) {
+    baseUrlString = bridge.urlString;
+    if ((bridge.workspaceHint ?? '').isNotEmpty && workingDirectory.isEmpty) {
+      workingDirectory = bridge.workspaceHint!;
+    }
+    bannerText = 'Selected ${bridge.name}.';
+    notifyListeners();
+  }
+
+  Future<void> discoverBridges() async {
+    isDiscovering = true;
+    lastError = null;
+    notifyListeners();
+    try {
+      final results = await BridgeDiscoveryChannel.browse(type: '_colonybridge._tcp.');
+      discoveredBridges = results.map(DiscoveredBridge.fromJson).toList(growable: false);
+    } catch (e) {
+      lastError = '$e';
+    } finally {
+      isDiscovering = false;
+      notifyListeners();
+    }
   }
 
   Future<void> refreshSession({required bool forceReconnect}) async {

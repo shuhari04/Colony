@@ -30,6 +30,10 @@
 	<string>Scan the Colony bridge QR code from your Mac.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Connect to your Mac Colony bridge on the local network.</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_colonybridge._tcp</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

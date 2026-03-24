@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
+import 'bridge_discovery_channel.dart';
 import 'bridge_models.dart';
 
 enum BridgeLifecycle { stopped, starting, running, stopping, failed }
@@ -121,6 +122,7 @@ class BridgeServerController extends ChangeNotifier {
     process.exitCode.then((code) async {
       _process = null;
       _stopHealthTimer();
+      await BridgeDiscoveryChannel.unpublish().catchError((_) {});
       bridgeReachable = false;
       if (_shutdownRequested || code == 0) {
         lifecycle = BridgeLifecycle.stopped;
@@ -135,6 +137,15 @@ class BridgeServerController extends ChangeNotifier {
     });
 
     _startHealthTimer();
+    await BridgeDiscoveryChannel.publish(
+      name: serviceName,
+      type: pairingPayload.bonjourType ?? '_colonybridge._tcp.',
+      port: normalizedPort,
+      txt: {
+        'workspace': workspacePath.split(Platform.pathSeparator).where((part) => part.isNotEmpty).lastOrNull ?? workspacePath,
+        'token': bridgeToken.trim().isEmpty ? '0' : '1',
+      },
+    ).catchError((_) {});
     await refreshHealth();
   }
 
@@ -145,6 +156,7 @@ class BridgeServerController extends ChangeNotifier {
     lifecycle = BridgeLifecycle.stopping;
     statusNote = 'Stopping bridge...';
     notifyListeners();
+    await BridgeDiscoveryChannel.unpublish().catchError((_) {});
     process.kill();
   }
 
@@ -256,4 +268,5 @@ class BridgeServerController extends ChangeNotifier {
 
 extension _FirstOrNull<T> on Iterable<T> {
   T? get firstOrNull => isEmpty ? null : first;
+  T? get lastOrNull => isEmpty ? null : last;
 }

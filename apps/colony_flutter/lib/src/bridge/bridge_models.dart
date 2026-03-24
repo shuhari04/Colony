@@ -45,6 +45,37 @@ class BridgePairingPayload {
   }
 }
 
+class DiscoveredBridge {
+  final String id;
+  final String name;
+  final String host;
+  final int port;
+  final bool tokenRequired;
+  final String? workspaceHint;
+
+  const DiscoveredBridge({
+    required this.id,
+    required this.name,
+    required this.host,
+    required this.port,
+    required this.tokenRequired,
+    this.workspaceHint,
+  });
+
+  String get urlString => 'http://$host:$port';
+
+  factory DiscoveredBridge.fromJson(Map<String, dynamic> json) {
+    return DiscoveredBridge(
+      id: json['id'] as String? ?? '',
+      name: json['name'] as String? ?? '',
+      host: json['host'] as String? ?? '127.0.0.1',
+      port: json['port'] as int? ?? int.tryParse('${json['port'] ?? ''}') ?? 0,
+      tokenRequired: json['tokenRequired'] as bool? ?? false,
+      workspaceHint: json['workspaceHint'] as String?,
+    );
+  }
+}
+
 class BridgeChatMessage {
   final String id;
   final BridgeRole role;

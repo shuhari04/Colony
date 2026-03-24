@@ -131,6 +131,70 @@ class _BridgeMobileScreenState extends State<BridgeMobileScreen> {
             onChanged: (value) => controller.token = value,
           ),
           const SizedBox(height: 12),
+          Row(
+            children: [
+              OutlinedButton.icon(
+                onPressed: controller.isDiscovering ? null : () => controller.discoverBridges(),
+                icon: const Icon(Icons.radar, size: 16),
+                label: Text(controller.isDiscovering ? 'Searching...' : 'Find Nearby Mac'),
+              ),
+              const SizedBox(width: 10),
+              OutlinedButton.icon(
+                onPressed: _presentScanner,
+                icon: const Icon(Icons.qr_code_scanner, size: 16),
+                label: const Text('Scan QR'),
+              ),
+            ],
+          ),
+          if (controller.discoveredBridges.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            const Text('Nearby Bridges', style: TextStyle(fontSize: 12, color: ColonyColors.text1)),
+            const SizedBox(height: 8),
+            for (final bridge in controller.discoveredBridges)
+              InkWell(
+                onTap: () {
+                  controller.applyDiscoveredBridge(bridge);
+                  _syncFields();
+                },
+                child: Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: ColonyColors.surface1,
+                    borderRadius: BorderRadius.circular(ColonyRadii.r2),
+                    border: Border.all(color: ColonyColors.border0),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.desktop_windows_outlined, size: 18, color: ColonyColors.text1),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(bridge.name, style: const TextStyle(fontWeight: FontWeight.w700)),
+                            const SizedBox(height: 2),
+                            Text(bridge.urlString, style: const TextStyle(fontSize: 12, color: ColonyColors.text1)),
+                            if ((bridge.workspaceHint ?? '').isNotEmpty)
+                              Text(bridge.workspaceHint!, style: const TextStyle(fontSize: 11, color: ColonyColors.text1)),
+                          ],
+                        ),
+                      ),
+                      if (bridge.tokenRequired)
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: ColonyColors.warning.withValues(alpha: 0.18),
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                          child: const Text('token', style: TextStyle(fontSize: 11)),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
+          ],
+          const SizedBox(height: 12),
           DropdownButtonFormField<BridgeExecutionMode>(
             initialValue: controller.executionMode,
             items: BridgeExecutionMode.values

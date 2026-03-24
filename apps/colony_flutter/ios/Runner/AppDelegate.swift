@@ -3,6 +3,7 @@ import UIKit
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
+  private let bridgeDiscoveryPlugin = BridgeDiscoveryPlugin()
   private var pendingScanResult: FlutterResult?
 
   override func application(
@@ -23,6 +24,16 @@ import UIKit
         return
       }
       self?.presentScanner(result: result)
+    }
+
+    if let discoveryRegistrar = engineBridge.pluginRegistry.registrar(forPlugin: "ColonyBridgeDiscovery") {
+      let discoveryChannel = FlutterMethodChannel(
+        name: "colony/bridge_discovery",
+        binaryMessenger: discoveryRegistrar.messenger()
+      )
+      discoveryChannel.setMethodCallHandler { [weak self] call, result in
+        self?.bridgeDiscoveryPlugin.handle(call: call, result: result)
+      }
     }
   }
 
