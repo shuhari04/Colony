@@ -42,12 +42,13 @@ public struct EnvironmentProbe {
     private func runShell(target: Target, script: String) throws -> ExecResult {
         switch target {
         case .local:
-            return try shell.run(["/usr/bin/env", "bash", "-lc", script])
+            let wrapped = "source ~/.zshrc >/dev/null 2>&1 || true; \(script)"
+            return try shell.run(["/bin/zsh", "-lc", wrapped])
         case let .ssh(host):
             let remote = ShellEscape.joinSh(["bash", "-lc", script])
             let env = ProcessInfo.processInfo.environment
             if let pw = env["COLONY_SSH_PASSWORD"], !pw.isEmpty {
-                let check = try? shell.run(["/usr/bin/env", "bash", "-lc", "command -v sshpass >/dev/null 2>&1"])
+                let check = try? shell.run(["/bin/zsh", "-lc", "source ~/.zshrc >/dev/null 2>&1 || true; command -v sshpass >/dev/null 2>&1"])
                 if check?.exitCode == 0 {
                     return try shell.run([
                         "/usr/bin/env", "sshpass", "-p", pw,

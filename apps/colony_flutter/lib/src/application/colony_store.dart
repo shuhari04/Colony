@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 import '../domain/colony_domain.dart';
+import '../infrastructure/colony_stream_event.dart';
 import 'colony_runtime.dart';
 import 'colony_selection.dart';
 
@@ -45,49 +46,6 @@ class ColonyStore extends ChangeNotifier {
       metadata: const {'role': 'primary'},
     );
     worldsById[world.id] = world;
-
-    final townHall = Building(
-      id: '${world.id}:town-hall',
-      worldId: world.id,
-      type: BuildingType.townHall,
-      name: 'Town Hall',
-      position: const WorldPosition(x: 0, y: 0, z: 0),
-      status: BuildingStatus.active,
-      provider: AgentProvider.none,
-    );
-    buildingsById[townHall.id] = townHall;
-
-    final codexHut = Building(
-      id: '${world.id}:hut:codex',
-      worldId: world.id,
-      type: BuildingType.agentHut,
-      name: 'Codex Hut',
-      position: const WorldPosition(x: 2, y: 1, z: 0),
-      status: BuildingStatus.available,
-      provider: AgentProvider.codex,
-    );
-    buildingsById[codexHut.id] = codexHut;
-
-    final claudeHut = Building(
-      id: '${world.id}:hut:claude',
-      worldId: world.id,
-      type: BuildingType.agentHut,
-      name: 'Claude Hut',
-      position: const WorldPosition(x: -2, y: 1, z: 0),
-      status: BuildingStatus.available,
-      provider: AgentProvider.claude,
-    );
-    buildingsById[claudeHut.id] = claudeHut;
-
-    final defaultZone = Zone(
-      id: '${world.id}:zone:default',
-      worldId: world.id,
-      label: 'Village Core',
-      bounds: const ZoneBounds(x: -4, y: -3, width: 8, height: 6),
-      status: ZoneStatus.active,
-      metadata: const {'seed': true},
-    );
-    zonesById[defaultZone.id] = defaultZone;
 
     _bootstrapped = true;
     notifyListeners();
@@ -153,12 +111,14 @@ class ColonyStore extends ChangeNotifier {
 
   void patchRuntime({
     Map<ColonyId, List<String>>? liveLogsBySessionTaskId,
+    Map<ColonyId, List<ColonyStreamEvent>>? liveEventsBySessionTaskId,
     Map<String, Object?>? backendSnapshot,
     String? lastError,
     Map<String, Object?>? metadata,
   }) {
     runtime = runtime.copyWith(
       liveLogsBySessionTaskId: liveLogsBySessionTaskId,
+      liveEventsBySessionTaskId: liveEventsBySessionTaskId,
       backendSnapshot: backendSnapshot,
       lastError: lastError,
       metadata: metadata,

@@ -90,7 +90,15 @@ class ProcessColonyCommandAdapter implements ColonyCommandAdapter {
   }) async {
     final args = ['start', address, '--', ...command];
     final res = await Process.run(binPath, args, environment: env);
-    if (res.exitCode != 0) throw Exception('colony start failed: ${res.stderr}');
+    if (res.exitCode != 0) {
+      final stderr = (res.stderr as String).trim();
+      final stdout = (res.stdout as String).trim();
+      final detail = [
+        if (stderr.isNotEmpty) stderr,
+        if (stdout.isNotEmpty) 'stdout: $stdout',
+      ].join('\n');
+      throw Exception('colony start failed for $address: ${detail.isEmpty ? 'unknown error' : detail}');
+    }
   }
 
   @override
@@ -126,6 +134,7 @@ class ProcessColonyCommandAdapter implements ColonyCommandAdapter {
     final args = <String>[
       'watch',
       address,
+      '--json',
       '--lines',
       '$lines',
       '--interval-ms',

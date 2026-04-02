@@ -19,16 +19,23 @@ public enum TmuxError: Error, CustomStringConvertible {
 
 public struct Tmux {
     private let shell: Shell
+    private static let localTmuxPath: String? = {
+        let shell = Shell()
+        let script = "source ~/.zshrc >/dev/null 2>&1 || true; command -v tmux"
+        let res = try? shell.run(["/bin/zsh", "-lc", script])
+        let lines = (res?.stdout ?? "")
+            .split(separator: "\n")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.hasPrefix("/") }
+        return lines.last
+    }()
 
     public init(shell: Shell = Shell()) {
         self.shell = shell
     }
 
     public func ensureTmuxExists() throws {
-        let res = try shell.run(["/usr/bin/env", "bash", "-lc", "command -v tmux >/dev/null 2>&1"])
-        if res.exitCode != 0 {
-            throw TmuxError.tmuxNotFound
-        }
+        _ = try localTmuxExecutable()
     }
 
     public func listSessions(target: Target) throws -> [String] {
@@ -95,8 +102,8 @@ public struct Tmux {
         switch target {
         case .local:
             // Replace current process for a real interactive attach.
-            let args = ["tmux", "attach", "-t", session]
-            try execvpOrThrow("/usr/bin/env", ["env"] + args)
+            let tmux = try localTmuxExecutable()
+            try execvpOrThrow(tmux, [tmux, "attach", "-t", session])
 
         case let .ssh(host):
             // ssh -t host tmux attach -t session
@@ -111,8 +118,8 @@ public struct Tmux {
     private func runTmux(target: Target, tmuxArgs: [String]) throws -> ExecResult {
         switch target {
         case .local:
-            // Run directly; rely on PATH resolution for tmux.
-            return try shell.run(["/usr/bin/env"] + tmuxArgs)
+            let tmux = try localTmuxExecutable()
+            return try shell.run([tmux] + Array(tmuxArgs.dropFirst()))
         case let .ssh(host):
             // ssh host 'tmux ...'
             let remote = ShellEscape.joinSh(tmuxArgs)
@@ -132,6 +139,13 @@ public struct Tmux {
             }
             return try shell.run(["/usr/bin/ssh", "-o", "StrictHostKeyChecking=accept-new", "-T", host, remote])
         }
+    }
+
+    private func localTmuxExecutable() throws -> String {
+        if let path = Self.localTmuxPath, !path.isEmpty {
+            return path
+        }
+        throw TmuxError.tmuxNotFound
     }
 }
 

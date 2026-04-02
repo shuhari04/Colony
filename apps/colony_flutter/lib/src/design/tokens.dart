@@ -3,9 +3,12 @@ import 'package:flutter/material.dart';
 class ColonyColors {
   static const bg0 = Color(0xFF05070D);
   static const bg1 = Color(0xFF070B14);
+  static const bg2 = Color(0xFF0A1120);
   static const surface0 = Color(0xFF0B1220);
   static const surface1 = Color(0xFF0F172A);
+  static const surface2 = Color(0xFF15213A);
   static const border0 = Color(0xFF1B2742);
+  static const border1 = Color(0xFF2B426B);
   static const text0 = Color(0xFFE6EDF7);
   static const text1 = Color(0xFFA9B5CC);
   static const muted0 = Color(0xFF6B7A99);
@@ -35,6 +38,22 @@ class ColonySpacing {
 
 class ColonyShadows {
   static List<BoxShadow> glowSmall(Color c) => [
-        BoxShadow(color: c.withValues(alpha: 0.35), blurRadius: 10, spreadRadius: 0),
-      ];
+    BoxShadow(
+      color: c.withValues(alpha: 0.35),
+      blurRadius: 10,
+      spreadRadius: 0,
+    ),
+  ];
+
+  static List<BoxShadow> glowMedium(Color c) => [
+    BoxShadow(
+      color: c.withValues(alpha: 0.28),
+      blurRadius: 18,
+      spreadRadius: 0,
+    ),
+  ];
+
+  static List<BoxShadow> panel = const [
+    BoxShadow(color: Color(0x40000000), blurRadius: 18, offset: Offset(0, 8)),
+  ];
 }

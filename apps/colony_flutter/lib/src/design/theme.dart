@@ -26,13 +26,26 @@ class ColonyTheme {
     return base.copyWith(
       colorScheme: colorScheme,
       scaffoldBackgroundColor: ColonyColors.bg0,
-      textTheme: textTheme.apply(bodyColor: ColonyColors.text0, displayColor: ColonyColors.text0),
+      textTheme: textTheme.apply(
+        bodyColor: ColonyColors.text0,
+        displayColor: ColonyColors.text0,
+      ),
       dividerColor: ColonyColors.border0,
+      appBarTheme: const AppBarTheme(
+        backgroundColor: ColonyColors.surface0,
+        foregroundColor: ColonyColors.text0,
+        elevation: 0,
+      ),
+      iconTheme: const IconThemeData(color: ColonyColors.text1),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: ColonyColors.surface0,
         hintStyle: const TextStyle(color: ColonyColors.text1),
-        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        labelStyle: const TextStyle(color: ColonyColors.text1),
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 12,
+          vertical: 10,
+        ),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(ColonyRadii.r2),
           borderSide: const BorderSide(color: ColonyColors.border0),
@@ -43,7 +56,67 @@ class ColonyTheme {
         ),
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(ColonyRadii.r2),
-          borderSide: const BorderSide(color: ColonyColors.accentCyan, width: 2),
+          borderSide: const BorderSide(
+            color: ColonyColors.accentCyan,
+            width: 2,
+          ),
+        ),
+      ),
+      elevatedButtonTheme: ElevatedButtonThemeData(
+        style: ButtonStyle(
+          minimumSize: const WidgetStatePropertyAll(Size(0, 42)),
+          padding: const WidgetStatePropertyAll(
+            EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          ),
+          shape: WidgetStatePropertyAll(
+            RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(ColonyRadii.r1),
+            ),
+          ),
+        ),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: ButtonStyle(
+          minimumSize: const WidgetStatePropertyAll(Size(0, 42)),
+          backgroundColor: const WidgetStatePropertyAll(
+            ColonyColors.accentCyan,
+          ),
+          foregroundColor: const WidgetStatePropertyAll(Colors.black),
+          padding: const WidgetStatePropertyAll(
+            EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          ),
+          shape: WidgetStatePropertyAll(
+            RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(ColonyRadii.r1),
+            ),
+          ),
+        ),
+      ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: ButtonStyle(
+          minimumSize: const WidgetStatePropertyAll(Size(0, 42)),
+          foregroundColor: const WidgetStatePropertyAll(ColonyColors.text0),
+          side: const WidgetStatePropertyAll(
+            BorderSide(color: ColonyColors.border1),
+          ),
+          padding: const WidgetStatePropertyAll(
+            EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          ),
+          shape: WidgetStatePropertyAll(
+            RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(ColonyRadii.r1),
+            ),
+          ),
+        ),
+      ),
+      textButtonTheme: TextButtonThemeData(
+        style: ButtonStyle(
+          foregroundColor: const WidgetStatePropertyAll(ColonyColors.text0),
+          shape: WidgetStatePropertyAll(
+            RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(ColonyRadii.r1),
+            ),
+          ),
         ),
       ),
     );

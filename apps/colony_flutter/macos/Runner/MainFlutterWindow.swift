@@ -9,6 +9,9 @@ class MainFlutterWindow: NSWindow {
     let windowFrame = self.frame
     self.contentViewController = flutterViewController
     self.setFrame(windowFrame, display: true)
+    self.title = "Colony"
+    self.minSize = NSSize(width: 1100, height: 760)
+    self.center()
 
     RegisterGeneratedPlugins(registry: flutterViewController)
 
@@ -21,5 +24,14 @@ class MainFlutterWindow: NSWindow {
     }
 
     super.awakeFromNib()
+    self.makeKeyAndOrderFront(nil)
+    self.orderFrontRegardless()
+    NSApp.activate(ignoringOtherApps: true)
+    DispatchQueue.main.async { [weak self] in
+      guard let self else { return }
+      self.makeKeyAndOrderFront(nil)
+      self.orderFrontRegardless()
+      NSApp.activate(ignoringOtherApps: true)
+    }
   }
 }
