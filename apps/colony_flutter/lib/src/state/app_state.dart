@@ -851,7 +851,7 @@ class AppState extends ChangeNotifier {
     final start = origin ?? building.origin;
     final length = switch (building.kind) {
       BoardBuildingKind.machine => 2,
-      BoardBuildingKind.workflowLine => 5,
+      BoardBuildingKind.workflowLine => 4,
       _ => 1,
     };
     final expandOnX = building.orientation == BoardOrientation.r;
@@ -897,7 +897,7 @@ class AppState extends ChangeNotifier {
       BoardBuildingKind.kanban => 'Visual task board',
       BoardBuildingKind.machine =>
         '${providerLabel(building.provider)} worker machine',
-      BoardBuildingKind.workflowLine => 'Five-tile line placeholder',
+      BoardBuildingKind.workflowLine => 'Four-tile line placeholder',
     };
   }
 

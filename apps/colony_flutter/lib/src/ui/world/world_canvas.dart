@@ -62,6 +62,48 @@ class _WorldCanvasState extends State<WorldCanvas>
             final draftBuilding = widget.state.draftBuildingId == null
                 ? null
                 : widget.state.boardBuildingById(widget.state.draftBuildingId!);
+            final sceneEntries =
+                <_SceneEntry>[
+                  for (
+                    var index = 0;
+                    index < widget.state.boardBuildings.length;
+                    index++
+                  )
+                    _SceneEntry(
+                      depth: geometry.renderDepthForBuilding(
+                        widget.state.boardBuildings[index],
+                      ),
+                      sequence: index,
+                      child: _buildBuildingNode(
+                        widget.state.boardBuildings[index],
+                        geometry,
+                        _pulse.value,
+                      ),
+                    ),
+                  for (
+                    var index = 0;
+                    index < widget.state.boardWorkers.length;
+                    index++
+                  )
+                    _SceneEntry(
+                      depth:
+                          geometry.renderDepthForWorker(
+                            widget.state.boardWorkers[index],
+                            widget.state.boardBuildings,
+                            widget.state.boardWorkers,
+                          ) +
+                          0.25,
+                      sequence: widget.state.boardBuildings.length + index,
+                      child: _buildWorkerNode(
+                        widget.state.boardWorkers[index],
+                        geometry,
+                      ),
+                    ),
+                ]..sort((a, b) {
+                  final depthCompare = a.depth.compareTo(b.depth);
+                  if (depthCompare != 0) return depthCompare;
+                  return a.sequence.compareTo(b.sequence);
+                });
 
             WidgetsBinding.instance.addPostFrameCallback((_) {
               if (_didInitTransform) return;
@@ -134,15 +176,7 @@ class _WorldCanvasState extends State<WorldCanvas>
                                   ),
                                 ),
                               ),
-                              for (final building
-                                  in widget.state.boardBuildings)
-                                _buildBuildingNode(
-                                  building,
-                                  geometry,
-                                  _pulse.value,
-                                ),
-                              for (final worker in widget.state.boardWorkers)
-                                _buildWorkerNode(worker, geometry),
+                              for (final entry in sceneEntries) entry.child,
                             ],
                           ),
                         ),
@@ -177,12 +211,14 @@ class _WorldCanvasState extends State<WorldCanvas>
         : 1.0;
     final spriteSize = _spriteSizeFor(building.kind);
     final anchor = geometry.anchorForBuilding(building);
+    final spriteOffset = _spriteOffsetFor(building.kind, geometry);
     final top =
         anchor.dy -
         spriteSize.height +
         _floorOffsetFor(building.kind) +
-        geometry.tileH;
-    final left = anchor.dx - spriteSize.width / 2;
+        geometry.tileH +
+        spriteOffset.dy;
+    final left = anchor.dx - spriteSize.width / 2 + spriteOffset.dx;
 
     return Positioned(
       left: left,
@@ -329,6 +365,16 @@ class _WorldCanvasState extends State<WorldCanvas>
     };
   }
 
+  Offset _spriteOffsetFor(BoardBuildingKind kind, _BoardGeometry geometry) {
+    return switch (kind) {
+      BoardBuildingKind.workflowLine => Offset(
+        -16 + geometry.tileW * 0.25,
+        -10 - geometry.tileH * 0.25,
+      ),
+      _ => Offset.zero,
+    };
+  }
+
   Color _workerColor(AgentProvider provider) {
     return switch (provider) {
       AgentProvider.codex => ColonyColors.accentCyan,
@@ -337,6 +383,18 @@ class _WorldCanvasState extends State<WorldCanvas>
       AgentProvider.other || AgentProvider.none => ColonyColors.text1,
     };
   }
+}
+
+class _SceneEntry {
+  final double depth;
+  final int sequence;
+  final Widget child;
+
+  const _SceneEntry({
+    required this.depth,
+    required this.sequence,
+    required this.child,
+  });
 }
 
 class _BoardGeometry {
@@ -399,7 +457,7 @@ class _BoardGeometry {
   List<GridPoint> _footprintCells(PlacedBuilding building) {
     final length = switch (building.kind) {
       BoardBuildingKind.machine => 2,
-      BoardBuildingKind.workflowLine => 5,
+      BoardBuildingKind.workflowLine => 4,
       _ => 1,
     };
     final expandOnX = building.orientation == BoardOrientation.r;
@@ -441,6 +499,20 @@ class _BoardGeometry {
     final dx = ((index % 3) - 1) * 18.0;
     final dy = (index ~/ 3) * -14.0;
     return Offset(anchor.dx + dx, anchor.dy - (target == null ? 18 : 42) + dy);
+  }
+
+  double renderDepthForBuilding(PlacedBuilding building) {
+    return _footprintCells(
+      building,
+    ).map((cell) => screenForCell(cell).dy).reduce(math.max);
+  }
+
+  double renderDepthForWorker(
+    PlacedWorker worker,
+    List<PlacedBuilding> buildings,
+    List<PlacedWorker> workers,
+  ) {
+    return anchorForWorker(worker, buildings, workers).dy;
   }
 }
 
