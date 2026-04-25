@@ -148,7 +148,8 @@ class _WorldCanvasState extends State<WorldCanvas>
                         height: _sceneSize.height,
                         child: GestureDetector(
                           behavior: HitTestBehavior.translucent,
-                          onTap: () => widget.state.handleBackgroundTap(),
+                          onTapUp: (details) =>
+                              _handleSceneTap(details.localPosition, geometry),
                           child: Stack(
                             clipBehavior: Clip.none,
                             children: [
@@ -227,7 +228,6 @@ class _WorldCanvasState extends State<WorldCanvas>
       height: spriteSize.height,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: () => _onBuildingTap(building),
         onPanUpdate: widget.state.draftBuildingId == building.id
             ? (details) =>
                   _updateDraftFromGlobal(details.globalPosition, geometry)
@@ -333,8 +333,47 @@ class _WorldCanvasState extends State<WorldCanvas>
     widget.state.updateDraftBuildingOrigin(point);
   }
 
-  Future<void> _onBuildingTap(PlacedBuilding building) async {
-    await widget.state.handleBuildingTap(building.id);
+  Future<void> _handleSceneTap(
+    Offset scenePosition,
+    _BoardGeometry geometry,
+  ) async {
+    final building = _buildingAtScenePosition(scenePosition, geometry);
+    if (building != null) {
+      await widget.state.handleBuildingTap(building.id);
+      return;
+    }
+    await widget.state.handleBackgroundTap();
+  }
+
+  PlacedBuilding? _buildingAtScenePosition(
+    Offset scenePosition,
+    _BoardGeometry geometry,
+  ) {
+    final cell = geometry.gridCellFromScene(scenePosition);
+    if (cell == null) return null;
+
+    PlacedBuilding? best;
+    double? bestDepth;
+    int bestSequence = -1;
+
+    for (var index = 0; index < widget.state.boardBuildings.length; index++) {
+      final building = widget.state.boardBuildings[index];
+      final containsCell = geometry
+          ._footprintCells(building)
+          .any((item) => item.x == cell.x && item.y == cell.y);
+      if (!containsCell) continue;
+
+      final depth = geometry.renderDepthForBuilding(building);
+      if (bestDepth == null ||
+          depth > bestDepth ||
+          (depth == bestDepth && index > bestSequence)) {
+        best = building;
+        bestDepth = depth;
+        bestSequence = index;
+      }
+    }
+
+    return best;
   }
 
   Size _spriteSizeFor(BoardBuildingKind kind) {
@@ -441,6 +480,26 @@ class _BoardGeometry {
       x: gx.round().clamp(0, AppState.boardDimension - 1),
       y: gy.round().clamp(0, AppState.boardDimension - 1),
     );
+  }
+
+  GridPoint? gridCellFromScene(Offset point) {
+    final dx = point.dx - origin.dx;
+    final dy = point.dy - origin.dy;
+    final gx = ((dx / (tileW / 2)) + (dy / (tileH / 2))) / 2;
+    final gy = ((dy / (tileH / 2)) - (dx / (tileW / 2))) / 2;
+    final cell = GridPoint(x: gx.round(), y: gy.round());
+    if (cell.x < 0 ||
+        cell.x >= AppState.boardDimension ||
+        cell.y < 0 ||
+        cell.y >= AppState.boardDimension) {
+      return null;
+    }
+
+    final center = screenForCell(cell);
+    final normalized =
+        (point.dx - center.dx).abs() / (tileW / 2) +
+        (point.dy - center.dy).abs() / (tileH / 2);
+    return normalized <= 1 ? cell : null;
   }
 
   Offset anchorForBuilding(PlacedBuilding building) {

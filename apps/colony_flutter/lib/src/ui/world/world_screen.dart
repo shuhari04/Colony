@@ -37,8 +37,12 @@ class _WorldScreenState extends State<WorldScreen> {
     super.dispose();
   }
 
-  Future<void> _confirmDeleteSelectedBuilding() async {
+  Future<void> _confirmDeleteSelectedObject() async {
     final selection = widget.state.selection;
+    if (selection.kind == SelectionKind.session) {
+      await _confirmDeleteSession(selection.id);
+      return;
+    }
     if (selection.kind != SelectionKind.building) return;
     final building = widget.state.boardBuildingById(selection.id);
     if (building == null) return;
@@ -72,6 +76,37 @@ class _WorldScreenState extends State<WorldScreen> {
     await widget.state.deleteBuilding(building.id);
   }
 
+  Future<void> _confirmDeleteSession(String address) async {
+    final session = widget.state.sessionByAddress(address);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: ColonyColors.surface0,
+        title: const Text('Delete Session'),
+        content: Text(
+          'Delete ${session?.name ?? address}? This will stop the running session.',
+          style: const TextStyle(height: 1.45),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: ColonyColors.danger,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await widget.state.deleteSession(address);
+  }
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -84,10 +119,10 @@ class _WorldScreenState extends State<WorldScreen> {
         return CallbackShortcuts(
           bindings: {
             const SingleActivator(LogicalKeyboardKey.backspace): () async {
-              await _confirmDeleteSelectedBuilding();
+              await _confirmDeleteSelectedObject();
             },
             const SingleActivator(LogicalKeyboardKey.delete): () async {
-              await _confirmDeleteSelectedBuilding();
+              await _confirmDeleteSelectedObject();
             },
           },
           child: Focus(
@@ -221,6 +256,14 @@ class _BuildingActionHud extends StatelessWidget {
           state.beginMovingBuilding(building.id);
         },
       ),
+      _HudAction(
+        label: 'Delete',
+        icon: Icons.delete_outline_rounded,
+        accent: ColonyColors.danger,
+        onTap: () async {
+          await _confirmDelete(context);
+        },
+      ),
     ];
 
     switch (building.kind) {
@@ -310,6 +353,37 @@ class _BuildingActionHud extends StatelessWidget {
     }
 
     return actions;
+  }
+
+  Future<void> _confirmDelete(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: ColonyColors.surface0,
+        title: const Text('Delete Building'),
+        content: Text(
+          'Delete ${_displayTitle()} from the board?',
+          style: const TextStyle(height: 1.45),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: ColonyColors.danger,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await state.deleteBuilding(building.id);
+    }
   }
 
   String _displayTitle() {
@@ -897,56 +971,62 @@ class _RateLimitShell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      decoration: BoxDecoration(
-        color: ColonyColors.bg1.withValues(alpha: 0.82),
-        borderRadius: BorderRadius.circular(ColonyRadii.r2),
-        border: Border.all(color: accent.withValues(alpha: 0.45)),
-        boxShadow: accent == ColonyColors.warning
-            ? ColonyShadows.glowSmall(accent)
-            : null,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            label,
-            style: const TextStyle(
-              fontSize: 10,
-              color: ColonyColors.text1,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 12,
-              color: accent,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-          const SizedBox(height: 6),
-          _RateMeterRow(
-            label: 'Primary',
-            remaining: primaryRemaining,
-            accent: accent,
-          ),
-          const SizedBox(height: 4),
-          _RateMeterRow(
-            label: 'Secondary',
-            remaining: secondaryRemaining,
-            accent: ColonyColors.info,
-          ),
-          if (detail != null) ...[
-            const SizedBox(height: 6),
+    return SizedBox(
+      width: 230,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: ColonyColors.bg1.withValues(alpha: 0.82),
+          borderRadius: BorderRadius.circular(ColonyRadii.r2),
+          border: Border.all(color: accent.withValues(alpha: 0.45)),
+          boxShadow: accent == ColonyColors.warning
+              ? ColonyShadows.glowSmall(accent)
+              : null,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
             Text(
-              detail!,
-              style: const TextStyle(fontSize: 10, color: ColonyColors.muted0),
+              label,
+              style: const TextStyle(
+                fontSize: 10,
+                color: ColonyColors.text1,
+                fontWeight: FontWeight.w700,
+              ),
             ),
+            const SizedBox(height: 2),
+            Text(
+              value,
+              style: TextStyle(
+                fontSize: 12,
+                color: accent,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 6),
+            _RateMeterRow(
+              label: 'Primary',
+              remaining: primaryRemaining,
+              accent: accent,
+            ),
+            const SizedBox(height: 4),
+            _RateMeterRow(
+              label: 'Secondary',
+              remaining: secondaryRemaining,
+              accent: ColonyColors.info,
+            ),
+            if (detail != null) ...[
+              const SizedBox(height: 6),
+              Text(
+                detail!,
+                style: const TextStyle(
+                  fontSize: 10,
+                  color: ColonyColors.muted0,
+                ),
+              ),
+            ],
           ],
-        ],
+        ),
       ),
     );
   }

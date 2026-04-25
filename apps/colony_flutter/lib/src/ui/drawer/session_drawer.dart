@@ -56,6 +56,7 @@ class _SessionDrawerState extends State<SessionDrawer> {
           session: session,
           accent: color,
           transcript: transcript,
+          onDelete: () => _confirmDeleteSession(session),
           onStop: () async {
             try {
               await widget.state.sendToSelection(
@@ -113,6 +114,37 @@ class _SessionDrawerState extends State<SessionDrawer> {
       addressOverride: widget.address,
     );
   }
+
+  Future<void> _confirmDeleteSession(Session? session) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: ColonyColors.surface0,
+        title: const Text('Delete Session'),
+        content: Text(
+          'Delete ${session?.name ?? widget.address}? This will stop the running session.',
+          style: const TextStyle(height: 1.45),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: ColonyColors.danger,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await widget.state.deleteSession(widget.address);
+    }
+  }
 }
 
 class _SessionHeader extends StatelessWidget {
@@ -120,6 +152,7 @@ class _SessionHeader extends StatelessWidget {
   final Session? session;
   final Color accent;
   final List<_TranscriptEntry> transcript;
+  final Future<void> Function() onDelete;
   final Future<void> Function() onStop;
 
   const _SessionHeader({
@@ -127,13 +160,18 @@ class _SessionHeader extends StatelessWidget {
     required this.session,
     required this.accent,
     required this.transcript,
+    required this.onDelete,
     required this.onStop,
   });
 
   @override
   Widget build(BuildContext context) {
-    final turns = transcript.where((entry) => entry.kind == _TranscriptEntryKind.user).length;
-    final responses = transcript.where((entry) => entry.kind == _TranscriptEntryKind.assistant).length;
+    final turns = transcript
+        .where((entry) => entry.kind == _TranscriptEntryKind.user)
+        .length;
+    final responses = transcript
+        .where((entry) => entry.kind == _TranscriptEntryKind.assistant)
+        .length;
 
     return Container(
       padding: const EdgeInsets.all(ColonySpacing.s4),
@@ -197,6 +235,18 @@ class _SessionHeader extends StatelessWidget {
             onPressed: onStop,
             icon: const Icon(Icons.stop_circle_outlined, size: 16),
             label: const Text('Stop'),
+          ),
+          const SizedBox(width: ColonySpacing.s2),
+          OutlinedButton.icon(
+            onPressed: onDelete,
+            icon: const Icon(Icons.delete_outline_rounded, size: 16),
+            label: const Text('Delete'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: ColonyColors.danger,
+              side: BorderSide(
+                color: ColonyColors.danger.withValues(alpha: 0.55),
+              ),
+            ),
           ),
         ],
       ),
@@ -283,9 +333,13 @@ class _ChatPane extends StatelessWidget {
                     itemBuilder: (context, index) {
                       final entry = transcript[index];
                       return Padding(
-                        padding: const EdgeInsets.only(bottom: ColonySpacing.s3),
+                        padding: const EdgeInsets.only(
+                          bottom: ColonySpacing.s3,
+                        ),
                         child: switch (entry.kind) {
-                          _TranscriptEntryKind.system => _SystemEventCard(entry: entry),
+                          _TranscriptEntryKind.system => _SystemEventCard(
+                            entry: entry,
+                          ),
                           _ => _ChatBubble(entry: entry, accent: accent),
                         },
                       );
@@ -323,10 +377,7 @@ class _ChatEmptyState extends StatelessWidget {
             SizedBox(height: ColonySpacing.s3),
             Text(
               'Waiting for the first turn',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w700,
-              ),
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.w700),
             ),
             SizedBox(height: ColonySpacing.s2),
             Text(
@@ -360,8 +411,9 @@ class _ChatBubble extends StatelessWidget {
     final borderColor = isUser
         ? accent.withValues(alpha: 0.45)
         : ColonyColors.border1.withValues(alpha: 0.72);
-    final alignment =
-        isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start;
+    final alignment = isUser
+        ? CrossAxisAlignment.end
+        : CrossAxisAlignment.start;
 
     return Column(
       crossAxisAlignment: alignment,
@@ -373,8 +425,9 @@ class _ChatBubble extends StatelessWidget {
             bottom: ColonySpacing.s1,
           ),
           child: Row(
-            mainAxisAlignment:
-                isUser ? MainAxisAlignment.end : MainAxisAlignment.start,
+            mainAxisAlignment: isUser
+                ? MainAxisAlignment.end
+                : MainAxisAlignment.start,
             children: [
               if (!isUser) ...[
                 _AvatarChip(
@@ -498,13 +551,15 @@ class _ActionPane extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final userCount =
-        transcript.where((entry) => entry.kind == _TranscriptEntryKind.user).length;
+    final userCount = transcript
+        .where((entry) => entry.kind == _TranscriptEntryKind.user)
+        .length;
     final assistantCount = transcript
         .where((entry) => entry.kind == _TranscriptEntryKind.assistant)
         .length;
-    final systemCount =
-        transcript.where((entry) => entry.kind == _TranscriptEntryKind.system).length;
+    final systemCount = transcript
+        .where((entry) => entry.kind == _TranscriptEntryKind.system)
+        .length;
 
     return Container(
       padding: const EdgeInsets.all(ColonySpacing.s4),
@@ -527,9 +582,21 @@ class _ActionPane extends StatelessWidget {
           const SizedBox(height: ColonySpacing.s3),
           _MetricStrip(
             children: [
-              _MiniMetric(label: 'Prompts', value: '$userCount', accent: accent),
-              _MiniMetric(label: 'Replies', value: '$assistantCount', accent: ColonyColors.info),
-              _MiniMetric(label: 'Events', value: '$systemCount', accent: ColonyColors.text1),
+              _MiniMetric(
+                label: 'Prompts',
+                value: '$userCount',
+                accent: accent,
+              ),
+              _MiniMetric(
+                label: 'Replies',
+                value: '$assistantCount',
+                accent: ColonyColors.info,
+              ),
+              _MiniMetric(
+                label: 'Events',
+                value: '$systemCount',
+                accent: ColonyColors.text1,
+              ),
             ],
           ),
           const SizedBox(height: ColonySpacing.s4),
@@ -878,10 +945,7 @@ List<_TranscriptEntry> _buildTranscriptFromEvents(
   };
 
   for (final event in events) {
-    final next = _entryFromStreamEvent(
-      event,
-      assistantLabel: assistantLabel,
-    );
+    final next = _entryFromStreamEvent(event, assistantLabel: assistantLabel);
     if (next == null) continue;
 
     if (next.kind == _TranscriptEntryKind.assistant &&
@@ -1084,14 +1148,14 @@ _TranscriptEntry? _parseLogLine(String line, {required String assistantLabel}) {
 bool _shouldSuppressLog(String line) {
   return line.startsWith('[oh-my-zsh]') ||
       line.contains('migration 21 was previously applied') ||
-      line.contains('state db discrepancy during find_thread_path_by_id_str_in_subdir') ||
+      line.contains(
+        'state db discrepancy during find_thread_path_by_id_str_in_subdir',
+      ) ||
       line.contains('Failed to delete shell snapshot');
 }
 
 bool _looksLikeDiagnostic(String line) {
-  final timestamped = RegExp(
-    r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}',
-  );
+  final timestamped = RegExp(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}');
   return timestamped.hasMatch(line) &&
       (line.contains(' WARN ') || line.contains(' ERROR '));
 }
@@ -1152,10 +1216,7 @@ _TranscriptEntry? _entryFromDecodedJson(
   final type = '${value['type'] ?? ''}'.trim();
 
   if (type == 'item.completed' && value['item'] is Map) {
-    return _entryFromDecodedJson(
-      value['item'],
-      assistantLabel: assistantLabel,
-    );
+    return _entryFromDecodedJson(value['item'], assistantLabel: assistantLabel);
   }
 
   if (type == 'agent_message') {

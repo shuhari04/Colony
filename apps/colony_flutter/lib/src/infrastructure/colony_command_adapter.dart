@@ -3,22 +3,91 @@ import 'dart:io';
 
 import 'colony_log_stream.dart';
 
+class ColonySessionSummary {
+  final String address;
+  final String node;
+  final String name;
+  final String provider;
+  final String kind;
+  final String? model;
+  final String state;
+  final String backend;
+
+  const ColonySessionSummary({
+    required this.address,
+    required this.node,
+    required this.name,
+    required this.provider,
+    required this.kind,
+    required this.state,
+    required this.backend,
+    this.model,
+  });
+
+  factory ColonySessionSummary.fromJson(Map<String, dynamic> json) {
+    return ColonySessionSummary(
+      address: '${json['address'] ?? ''}',
+      node: '${json['node'] ?? 'local'}',
+      name: '${json['name'] ?? ''}',
+      provider: '${json['provider'] ?? 'generic'}',
+      kind: '${json['kind'] ?? 'generic'}',
+      model: (json['model'] as String?)?.trim().isEmpty ?? true
+          ? null
+          : (json['model'] as String?)?.trim(),
+      state: '${json['state'] ?? 'unknown'}',
+      backend: '${json['backend'] ?? 'local_tmux'}',
+    );
+  }
+}
+
+class ColonyProviderSummary {
+  final String id;
+  final String displayName;
+  final bool available;
+  final String? defaultModel;
+  final List<String>? supportedModels;
+
+  const ColonyProviderSummary({
+    required this.id,
+    required this.displayName,
+    required this.available,
+    this.defaultModel,
+    this.supportedModels,
+  });
+
+  factory ColonyProviderSummary.fromJson(Map<String, dynamic> json) {
+    return ColonyProviderSummary(
+      id: '${json['id'] ?? ''}',
+      displayName: '${json['displayName'] ?? json['id'] ?? ''}',
+      available: json['available'] == true,
+      defaultModel: (json['defaultModel'] as String?)?.trim().isEmpty ?? true
+          ? null
+          : (json['defaultModel'] as String?)?.trim(),
+      supportedModels: (json['supportedModels'] as List?)
+          ?.map((item) => '$item')
+          .toList(growable: false),
+    );
+  }
+}
+
 abstract class ColonyCommandAdapter {
   String get binPath;
 
-  Future<List<String>> listSessions({
+  Future<List<ColonySessionSummary>> listSessions({
     String target = 'local',
     Map<String, String>? env,
   });
 
-  Future<List<String>> listProviders({
+  Future<List<ColonyProviderSummary>> listProviders({
     String target = 'local',
     Map<String, String>? env,
   });
 
-  Future<void> startSession(
-    String address,
-    List<String> command, {
+  Future<ColonySessionSummary> createSession({
+    required String nodeId,
+    required String name,
+    required String provider,
+    String? model,
     Map<String, String>? env,
   });
 
@@ -54,41 +123,64 @@ class ProcessColonyCommandAdapter implements ColonyCommandAdapter {
   ProcessColonyCommandAdapter(this.binPath);
 
   @override
-  Future<List<String>> listSessions({
+  Future<List<ColonySessionSummary>> listSessions({
     String target = 'local',
     Map<String, String>? env,
   }) async {
-    final res = await Process.run(binPath, ['list', target], environment: env);
+    final res = await Process.run(
+      binPath,
+      ['session', 'list', target, '--json'],
+      environment: env,
+    );
     if (res.exitCode != 0) {
       throw Exception('colony list failed: ${res.stderr}');
     }
-    final out = (res.stdout as String).trim();
-    if (out.isEmpty) return [];
-    return out.split('\n').map((line) => line.trim()).where((line) => line.isNotEmpty).toList();
+    final decoded = jsonDecode((res.stdout as String).trim());
+    if (decoded is! List) return const [];
+    return decoded
+        .whereType<Map>()
+        .map((json) => ColonySessionSummary.fromJson(Map<String, dynamic>.from(json)))
+        .toList(growable: false);
   }
 
   @override
-  Future<List<String>> listProviders({
+  Future<List<ColonyProviderSummary>> listProviders({
     String target = 'local',
     Map<String, String>? env,
   }) async {
-    final args = <String>['providers', target];
+    final args = <String>['providers', 'list', target, '--json'];
     final res = await Process.run(binPath, args, environment: env);
     if (res.exitCode != 0) {
       throw Exception('colony providers failed: ${res.stderr}');
     }
-    final out = (res.stdout as String).trim();
-    if (out.isEmpty) return [];
-    return out.split('\n').map((line) => line.trim()).where((line) => line.isNotEmpty).toList();
+    final decoded = jsonDecode((res.stdout as String).trim());
+    if (decoded is! List) return const [];
+    return decoded
+        .whereType<Map>()
+        .map((json) => ColonyProviderSummary.fromJson(Map<String, dynamic>.from(json)))
+        .toList(growable: false);
   }
 
   @override
-  Future<void> startSession(
-    String address,
-    List<String> command, {
+  Future<ColonySessionSummary> createSession({
+    required String nodeId,
+    required String name,
+    required String provider,
+    String? model,
     Map<String, String>? env,
   }) async {
-    final args = ['start', address, '--', ...command];
+    final args = <String>[
+      'session',
+      'create',
+      '--provider',
+      provider,
+      '--node',
+      nodeId,
+      '--name',
+      name,
+      if (model != null && model.trim().isNotEmpty) ...['--model', model.trim()],
+      '--json',
+    ];
     final res = await Process.run(binPath, args, environment: env);
     if (res.exitCode != 0) {
       final stderr = (res.stderr as String).trim();
@@ -97,8 +189,11 @@ class ProcessColonyCommandAdapter implements ColonyCommandAdapter {
         if (stderr.isNotEmpty) stderr,
         if (stdout.isNotEmpty) 'stdout: $stdout',
       ].join('\n');
-      throw Exception('colony start failed for $address: ${detail.isEmpty ? 'unknown error' : detail}');
+      throw Exception('colony session create failed: ${detail.isEmpty ? 'unknown error' : detail}');
     }
+    return ColonySessionSummary.fromJson(
+      jsonDecode(res.stdout as String) as Map<String, dynamic>,
+    );
   }
 
   @override
@@ -132,6 +227,7 @@ class ProcessColonyCommandAdapter implements ColonyCommandAdapter {
     Map<String, String>? env,
   }) {
     final args = <String>[
+      'session',
       'watch',
       address,
       '--json',

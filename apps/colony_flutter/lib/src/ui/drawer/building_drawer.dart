@@ -180,59 +180,100 @@ class BuildingDrawer extends StatelessWidget {
     PlacedBuilding building,
     List<PlacedWorker> workers,
   ) {
-    switch (building.kind) {
-      case BoardBuildingKind.buildingWorkspace:
-      case BoardBuildingKind.buildingAltA:
-      case BoardBuildingKind.buildingAltB:
-        return [
+    final deleteAction = OutlinedButton.icon(
+      onPressed: () => _confirmDeleteBuilding(context, building),
+      icon: const Icon(Icons.delete_outline_rounded, size: 16),
+      label: const Text('Delete'),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: ColonyColors.danger,
+        side: BorderSide(color: ColonyColors.danger.withValues(alpha: 0.55)),
+      ),
+    );
+
+    final actions = switch (building.kind) {
+      BoardBuildingKind.buildingWorkspace ||
+      BoardBuildingKind.buildingAltA ||
+      BoardBuildingKind.buildingAltB => [
+        FilledButton.tonalIcon(
+          onPressed: () => state.bindWorkspaceForBuilding(building.id),
+          icon: const Icon(Icons.folder_open_rounded, size: 16),
+          label: Text(
+            (building.workspacePath ?? '').isEmpty
+                ? 'Choose Workspace'
+                : 'Change Workspace',
+          ),
+        ),
+      ],
+      BoardBuildingKind.machine => [
+        FilledButton.tonalIcon(
+          onPressed: () => state.createWorkerForMachine(building.id),
+          icon: const Icon(Icons.add_rounded, size: 16),
+          label: const Text('New Worker'),
+        ),
+        if (workers.isNotEmpty)
           FilledButton.tonalIcon(
-            onPressed: () => state.bindWorkspaceForBuilding(building.id),
-            icon: const Icon(Icons.folder_open_rounded, size: 16),
-            label: Text(
-              (building.workspacePath ?? '').isEmpty
-                  ? 'Choose Workspace'
-                  : 'Change Workspace',
+            onPressed: () => state.beginWorkerAssignment(workers.first.id),
+            icon: const Icon(Icons.send_to_mobile_rounded, size: 16),
+            label: const Text('Assign Latest'),
+          ),
+      ],
+      BoardBuildingKind.server => [
+        FilledButton.tonalIcon(
+          onPressed: () async {
+            final existing = building.serverConfig;
+            final result = await showDialog<ServerConfigDialogResult>(
+              context: context,
+              builder: (context) => ServerConfigDialog(initial: existing),
+            );
+            if (result == null) return;
+            await state.configureServerBuilding(
+              building.id,
+              alias: result.alias,
+              host: result.host,
+              password: result.password,
+            );
+          },
+          icon: const Icon(Icons.settings_ethernet_rounded, size: 16),
+          label: const Text('Configure'),
+        ),
+      ],
+      BoardBuildingKind.kanban || BoardBuildingKind.workflowLine => <Widget>[],
+    };
+
+    return [...actions, deleteAction];
+  }
+
+  Future<void> _confirmDeleteBuilding(
+    BuildContext context,
+    PlacedBuilding building,
+  ) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: ColonyColors.surface0,
+        title: const Text('Delete Building'),
+        content: Text(
+          'Delete ${state.titleForBuildingKind(building.kind)} from the board?',
+          style: const TextStyle(height: 1.45),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: ColonyColors.danger,
+              foregroundColor: Colors.white,
             ),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
           ),
-        ];
-      case BoardBuildingKind.machine:
-        return [
-          FilledButton.tonalIcon(
-            onPressed: () => state.createWorkerForMachine(building.id),
-            icon: const Icon(Icons.add_rounded, size: 16),
-            label: const Text('New Worker'),
-          ),
-          if (workers.isNotEmpty)
-            FilledButton.tonalIcon(
-              onPressed: () => state.beginWorkerAssignment(workers.first.id),
-              icon: const Icon(Icons.send_to_mobile_rounded, size: 16),
-              label: const Text('Assign Latest'),
-            ),
-        ];
-      case BoardBuildingKind.server:
-        return [
-          FilledButton.tonalIcon(
-            onPressed: () async {
-              final existing = building.serverConfig;
-              final result = await showDialog<ServerConfigDialogResult>(
-                context: context,
-                builder: (context) => ServerConfigDialog(initial: existing),
-              );
-              if (result == null) return;
-              await state.configureServerBuilding(
-                building.id,
-                alias: result.alias,
-                host: result.host,
-                password: result.password,
-              );
-            },
-            icon: const Icon(Icons.settings_ethernet_rounded, size: 16),
-            label: const Text('Configure'),
-          ),
-        ];
-      case BoardBuildingKind.kanban:
-      case BoardBuildingKind.workflowLine:
-        return const [];
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await state.deleteBuilding(building.id);
     }
   }
 
@@ -399,9 +440,48 @@ class _WorkerRow extends StatelessWidget {
             onPressed: () => state.beginWorkerAssignment(worker.id),
             child: const Text('Assign'),
           ),
+          const SizedBox(width: 4),
+          IconButton(
+            tooltip: 'Delete worker',
+            onPressed: () => _confirmDeleteWorker(context),
+            color: ColonyColors.danger,
+            icon: const Icon(Icons.delete_outline_rounded, size: 18),
+          ),
         ],
       ),
     );
+  }
+
+  Future<void> _confirmDeleteWorker(BuildContext context) async {
+    final label = worker.sessionAddress ?? worker.id;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: ColonyColors.surface0,
+        title: const Text('Delete Worker'),
+        content: Text(
+          'Delete $label? This will stop its session if one is attached.',
+          style: const TextStyle(height: 1.45),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: ColonyColors.danger,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await state.deleteWorker(worker.id);
+    }
   }
 }
 

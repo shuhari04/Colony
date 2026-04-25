@@ -158,12 +158,12 @@ class _NewSessionDialogState extends State<NewSessionDialog> {
   }
 
   String _descriptionForKind(SessionKind kind, String nodeId) {
-    final prefix = 'Creates @$nodeId:<name> and starts: ';
+    final prefix = 'Creates a ${_kindLabel(kind)} session on $nodeId via colony session create';
     return switch (kind) {
-      SessionKind.codex => '${prefix}codex --model <model>',
-      SessionKind.claude => '${prefix}claude',
-      SessionKind.openclaw => '${prefix}openclaw agent',
-      SessionKind.generic => '${prefix}bash -lc cat',
+      SessionKind.codex => '$prefix with model selection',
+      SessionKind.claude => prefix,
+      SessionKind.openclaw => prefix,
+      SessionKind.generic => '$prefix (generic compatibility mode)',
     };
   }
 }

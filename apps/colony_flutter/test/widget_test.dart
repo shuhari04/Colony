@@ -1,28 +1,45 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
-import 'package:colony_flutter/src/bridge/bridge_server_controller.dart';
-import 'package:colony_flutter/src/design/theme.dart';
-import 'package:colony_flutter/src/state/app_state.dart';
-import 'package:colony_flutter/src/ui/world/world_screen.dart';
+import 'package:colony_flutter/src/infrastructure/colony_command_adapter.dart';
+import 'package:colony_flutter/src/infrastructure/colony_stream_event.dart';
 
 void main() {
-  testWidgets('App boots', (WidgetTester tester) async {
-    final state = AppState();
-    final bridge = BridgeServerController();
-    await tester.pumpWidget(
-      MaterialApp(
-        theme: ColonyTheme.dark(),
-        home: WorldScreen(state: state, bridgeController: bridge),
-      ),
+  test('parses session summary json', () {
+    final summary = ColonySessionSummary.fromJson(const {
+      'address': '@local:codex1',
+      'node': 'local',
+      'name': 'codex1',
+      'provider': 'codex',
+      'kind': 'codex',
+      'model': 'gpt-5.2',
+      'state': 'running',
+      'backend': 'local_tmux',
+    });
+
+    expect(summary.address, '@local:codex1');
+    expect(summary.provider, 'codex');
+    expect(summary.kind, 'codex');
+    expect(summary.model, 'gpt-5.2');
+  });
+
+  test('parses provider summary json', () {
+    final summary = ColonyProviderSummary.fromJson(const {
+      'id': 'claude',
+      'displayName': 'Claude',
+      'available': true,
+    });
+
+    expect(summary.id, 'claude');
+    expect(summary.displayName, 'Claude');
+    expect(summary.available, isTrue);
+  });
+
+  test('parses transcript event line', () {
+    final event = ColonyStreamEvent.fromLine(
+      '{"kind":"assistant_message","text":"hello","label":"Codex"}',
     );
-    expect(find.byType(WorldScreen), findsOneWidget);
+
+    expect(event.kind, ColonyStreamEventKind.assistantMessage);
+    expect(event.text, 'hello');
+    expect(event.label, 'Codex');
   });
 }

@@ -73,6 +73,30 @@ public struct Tmux {
         }
     }
 
+    public func setSessionEnvironment(target: Target, session: String, variables: [String: String]) throws {
+        for (key, value) in variables.sorted(by: { $0.key < $1.key }) {
+            let res = try runTmux(target: target, tmuxArgs: ["tmux", "set-environment", "-t", session, key, value])
+            if res.exitCode != 0 {
+                throw TmuxError.commandFailed("Failed to set tmux environment for \(session): \(res.stderr)")
+            }
+        }
+    }
+
+    public func showSessionEnvironment(target: Target, session: String) throws -> [String: String] {
+        let res = try runTmux(target: target, tmuxArgs: ["tmux", "show-environment", "-t", session])
+        if res.exitCode != 0 {
+            throw TmuxError.commandFailed("Failed to inspect tmux environment for \(session): \(res.stderr)")
+        }
+
+        var output: [String: String] = [:]
+        for rawLine in res.stdout.split(separator: "\n") {
+            let line = String(rawLine).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty, !line.hasPrefix("-"), let idx = line.firstIndex(of: "=") else { continue }
+            output[String(line[..<idx])] = String(line[line.index(after: idx)...])
+        }
+        return output
+    }
+
     public func sendKeys(target: Target, session: String, text: String, pressEnter: Bool) throws {
         var keys: [String] = [text]
         if pressEnter { keys.append("Enter") }

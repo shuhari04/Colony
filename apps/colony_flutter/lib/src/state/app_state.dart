@@ -110,7 +110,6 @@ class AppState extends ChangeNotifier {
   final Map<String, List<String>> _sessionLogs = {};
   final Map<String, ColonyLogStream> _logStreamsByTaskId = {};
   final Map<String, String> _sessionTaskIdByAddress = {};
-  final Map<String, SessionKind> _sessionKindHintsByAddress = {};
   final Map<String, String> _preferredHomeBuildingByAddress = {};
 
   List<PlacedBuilding> _boardBuildings = const [];
@@ -168,15 +167,13 @@ class AppState extends ChangeNotifier {
 
     try {
       final listed = await cli.listProviders(target: 'local');
-      _providersByNode['local'] = _normalizedProviders(
-        listed
-            .map(_providerFromName)
-            .whereType<AgentProvider>()
-            .toList(growable: false),
-        target: 'local',
-      );
+      _providersByNode['local'] = listed
+          .where((provider) => provider.available)
+          .map((provider) => _providerFromName(provider.id))
+          .whereType<AgentProvider>()
+          .toList(growable: false);
     } catch (_) {
-      _providersByNode['local'] = _fallbackProvidersForTarget('local');
+      _providersByNode['local'] = const [];
     }
   }
 
@@ -184,11 +181,11 @@ class AppState extends ChangeNotifier {
     final cli = _cli;
     if (cli == null) return;
 
-    final addresses = await cli.listSessions(target: 'local');
+    final summaries = await cli.listSessions(target: 'local');
     sessions
       ..clear()
-      ..addAll(_sessionsFromAddresses(addresses));
-    _syncSessionTasks(addresses);
+      ..addAll(_sessionsFromSummaries(summaries));
+    _syncSessionTasks(summaries);
     _pruneStreamsForMissingTasks();
   }
 
@@ -202,7 +199,8 @@ class AppState extends ChangeNotifier {
     );
   }
 
-  void _syncSessionTasks(List<String> addresses) {
+  void _syncSessionTasks(List<ColonySessionSummary> summaries) {
+    final addresses = summaries.map((session) => session.address).toList();
     final activeTaskIds = <String>{};
     final activeWorkerIds = <String>{};
     final currentWorkersByAddress = {
@@ -224,15 +222,12 @@ class AppState extends ChangeNotifier {
     final usageByMachineId = <String, int>{};
     final nextBoardWorkers = <PlacedWorker>[];
 
-    for (final address in addresses) {
-      final parsed = _parseAddress(address);
-      if (parsed == null) continue;
-      final (_, sessionName) = parsed;
+    for (final summary in summaries) {
+      final address = summary.address;
       final taskId = _sessionTaskIdByAddress[address] ??= 'task:$address';
       activeTaskIds.add(taskId);
 
-      final kind =
-          _sessionKindHintsByAddress[address] ?? _inferKind(sessionName);
+      final kind = _sessionKindFromWire(summary.kind);
       final provider = _providerForSessionKind(kind);
       final machineId = _resolveHomeMachineId(
         address: address,
@@ -296,19 +291,21 @@ class AppState extends ChangeNotifier {
                   workerId: existingWorker?.id ?? 'worker:$address',
                   address: address,
                   backend: SessionBackend.localTmux,
-                  title: sessionName,
+                  title: summary.name,
                 ))
             .copyWith(
               workerId: existingWorker?.id ?? 'worker:$address',
               address: address,
               backend: SessionBackend.localTmux,
-              title: sessionName,
+              title: summary.name,
               status: SessionTaskStatus.running,
               startedAt: currentTask?.startedAt ?? DateTime.now(),
               metadata: {
                 ...(currentTask?.metadata ?? const {}),
-                'nodeId': 'local',
+                'nodeId': summary.node,
+                'provider': summary.provider,
                 'sessionKind': kind.name,
+                if (summary.model != null) 'model': summary.model,
                 ...?(machineId == null ? null : {'homeBuildingId': machineId}),
                 ...?(effectiveAssignedBuildingId == null
                     ? null
@@ -513,15 +510,6 @@ class AppState extends ChangeNotifier {
     if (cli == null) return;
 
     final addr = '@$nodeId:$name';
-    final codexModel = (model != null && model.trim().isNotEmpty)
-        ? model.trim()
-        : 'gpt-5.2';
-    final cmd = _commandForSession(
-      kind: kind,
-      nodeId: nodeId,
-      codexModel: codexModel,
-      colonyBin: cli.binPath,
-    );
 
     lastError = null;
     store.patchRuntime(lastError: null);
@@ -530,8 +518,13 @@ class AppState extends ChangeNotifier {
       if (preferredHomeBuildingId != null) {
         _preferredHomeBuildingByAddress[addr] = preferredHomeBuildingId;
       }
-      await cli.startSession(addr, cmd, env: _envForAddress(addr));
-      _sessionKindHintsByAddress[addr] = kind;
+      await cli.createSession(
+        nodeId: nodeId,
+        name: name,
+        provider: _providerIdForKind(kind),
+        model: model,
+        env: _envForAddress(addr),
+      );
       await _refreshSessions();
       final session = sessions.firstWhere(
         (candidate) => candidate.address == addr,
@@ -679,6 +672,65 @@ class AppState extends ChangeNotifier {
       ),
     );
     _assigningWorkerId = null;
+    notifyListeners();
+  }
+
+  Future<void> deleteSession(String address) async {
+    final resolvedAddress = resolveAddressShorthand(address);
+    final cli = _cli;
+    if (cli == null) return;
+
+    lastError = null;
+    store.patchRuntime(lastError: null);
+    notifyListeners();
+
+    try {
+      await cli.stopSession(
+        resolvedAddress,
+        env: _envForAddress(resolvedAddress),
+      );
+      final taskId = _taskIdForAddress(resolvedAddress);
+      if (taskId != null) {
+        final task = store.sessionTasksById.remove(taskId);
+        if (task != null) {
+          store.workersById.remove(task.workerId);
+        }
+        _logStreamsByTaskId.remove(taskId)?.stop();
+      }
+      _sessionTaskIdByAddress.remove(resolvedAddress);
+      _sessionLogs.remove(resolvedAddress);
+      _preferredHomeBuildingByAddress.remove(resolvedAddress);
+      _boardWorkers = _boardWorkers
+          .where((worker) => worker.sessionAddress != resolvedAddress)
+          .toList(growable: false);
+      if (selection.kind == SelectionKind.session &&
+          selection.id == resolvedAddress) {
+        selection = const Selection.none();
+      }
+      await _refreshSessions();
+      notifyListeners();
+    } catch (e) {
+      lastError = '$e';
+      store.patchRuntime(lastError: lastError);
+      notifyListeners();
+    }
+  }
+
+  Future<void> deleteWorker(String workerId) async {
+    final worker = boardWorkerById(workerId);
+    if (worker == null) return;
+    final sessionAddress = worker.sessionAddress;
+    if (sessionAddress != null && sessionAddress.isNotEmpty) {
+      await deleteSession(sessionAddress);
+      return;
+    }
+
+    _boardWorkers = _boardWorkers
+        .where((candidate) => candidate.id != workerId)
+        .toList(growable: false);
+    if (_assigningWorkerId == workerId) {
+      _assigningWorkerId = null;
+    }
     notifyListeners();
   }
 
@@ -975,128 +1027,6 @@ class AppState extends ChangeNotifier {
     return '$prefix$index';
   }
 
-  List<String> _commandForSession({
-    required SessionKind kind,
-    required String nodeId,
-    required String codexModel,
-    required String colonyBin,
-  }) {
-    final isLocal = nodeId == 'local';
-    if (isLocal) {
-      return switch (kind) {
-        SessionKind.codex => <String>[
-          colonyBin,
-          'agent',
-          'codex',
-          '--model',
-          codexModel,
-        ],
-        SessionKind.claude => <String>[colonyBin, 'agent', 'claude'],
-        SessionKind.openclaw => <String>[
-          '/bin/zsh',
-          '-lc',
-          _localZshScript(_bashAgentOpenClaw()),
-        ],
-        SessionKind.generic => <String>['/usr/bin/env', 'bash', '-lc', 'cat'],
-      };
-    }
-
-    return switch (kind) {
-      SessionKind.codex => <String>[
-        '/usr/bin/env',
-        'bash',
-        '-lc',
-        _remoteBashAgentCodex(model: codexModel),
-      ],
-      SessionKind.claude => <String>[
-        '/usr/bin/env',
-        'bash',
-        '-lc',
-        _remoteBashAgentClaude(),
-      ],
-      SessionKind.openclaw => <String>[
-        '/usr/bin/env',
-        'bash',
-        '-lc',
-        _bashAgentOpenClaw(),
-      ],
-      SessionKind.generic => <String>['/usr/bin/env', 'bash', '-lc', 'cat'],
-    };
-  }
-
-  String _bashAgentOpenClaw() {
-    final script = r'''
-set -euo pipefail
-AGENT_ID="$(openclaw agents list 2>/dev/null | awk '/^- /{print $2; exit}')"
-AGENT_ID="${AGENT_ID:-main}"
-echo "[colony-agent] openclaw ready (agent=$AGENT_ID)"
-while IFS= read -r line; do
-  line="$(printf "%s" "$line" | tr -d '\r')"
-  [ -z "$line" ] && continue
-  echo "[colony-agent] >>> $line"
-  openclaw agent --local --agent "$AGENT_ID" --json -m "$line" 2>&1
-  echo "[colony-agent] <<< done"
-done
-''';
-    return script
-        .split('\n')
-        .map((line) => line.trim())
-        .where((line) => line.isNotEmpty)
-        .join('; ');
-  }
-
-  String _localZshScript(String script) {
-    return 'source ~/.zshrc >/dev/null 2>&1 || true; $script';
-  }
-
-  String _remoteBashAgentCodex({required String model}) {
-    final sanitized = model.replaceAll("'", '');
-    final script =
-        r'''
-set -euo pipefail
-MODEL="''' +
-        sanitized +
-        r'''"
-echo "[colony-agent] codex remote ready (model=$MODEL)"
-while IFS= read -r line; do
-  line="$(printf "%s" "$line" | tr -d '\r')"
-  [ -z "$line" ] && continue
-  if [[ "$line" == /model\ * ]]; then
-    MODEL="${line#/model }"
-    echo "[colony-agent] model set to $MODEL"
-    continue
-  fi
-  echo "[colony-agent] >>> $line"
-  codex exec --json --skip-git-repo-check -m "$MODEL" "$line" 2>&1
-  echo "[colony-agent] <<< done"
-done
-''';
-    return script
-        .split('\n')
-        .map((line) => line.trim())
-        .where((line) => line.isNotEmpty)
-        .join('; ');
-  }
-
-  String _remoteBashAgentClaude() {
-    final script = r'''
-set -euo pipefail
-echo "[colony-agent] claude remote ready"
-while IFS= read -r line; do
-  line="$(printf "%s" "$line" | tr -d '\r')"
-  [ -z "$line" ] && continue
-  echo "[colony-agent] >>> $line"
-  claude -p --verbose --output-format=stream-json --include-partial-messages "$line" 2>&1
-  echo "[colony-agent] <<< done"
-done
-''';
-    return script
-        .split('\n')
-        .map((line) => line.trim())
-        .where((line) => line.isNotEmpty)
-        .join('; ');
-  }
-
   void _startStreamingForTask(String taskId, String address) {
     _stopStreaming();
     final cli = _cli;
@@ -1178,34 +1108,40 @@ done
     }
   }
 
-  List<Session> _sessionsFromAddresses(List<String> addresses) {
+  List<Session> _sessionsFromSummaries(List<ColonySessionSummary> summaries) {
     final output = <Session>[];
-    for (final address in addresses) {
-      final parsed = _parseAddress(address);
-      if (parsed == null) continue;
-      final (nodeId, name) = parsed;
+    for (final summary in summaries) {
       output.add(
         Session(
-          node: NodeRef(nodeId),
-          name: name,
-          kind: _sessionKindHintsByAddress[address] ?? _inferKind(name),
+          node: NodeRef(summary.node),
+          name: summary.name,
+          kind: _sessionKindFromWire(summary.kind),
           x: 0,
           y: 0,
-          status: SessionStatus.running,
+          status: _sessionStatusFromWire(summary.state),
         ),
       );
     }
     return output;
   }
 
-  SessionKind _inferKind(String name) {
-    final normalized = name.toLowerCase();
-    if (normalized.contains('codex')) return SessionKind.codex;
-    if (normalized.contains('claude')) return SessionKind.claude;
-    if (normalized.contains('openclaw') || normalized.contains('opencode')) {
-      return SessionKind.openclaw;
-    }
-    return SessionKind.generic;
+  SessionKind _sessionKindFromWire(String raw) {
+    return switch (raw.trim().toLowerCase()) {
+      'codex' => SessionKind.codex,
+      'claude' => SessionKind.claude,
+      'openclaw' => SessionKind.openclaw,
+      _ => SessionKind.generic,
+    };
+  }
+
+  SessionStatus _sessionStatusFromWire(String raw) {
+    return switch (raw.trim().toLowerCase()) {
+      'running' => SessionStatus.running,
+      'stopped' => SessionStatus.stopped,
+      'failed' => SessionStatus.failed,
+      'throttled' => SessionStatus.throttled,
+      _ => SessionStatus.unknown,
+    };
   }
 
   AgentProvider _providerForSessionKind(SessionKind kind) {
@@ -1228,41 +1164,13 @@ done
     };
   }
 
-  List<AgentProvider> _normalizedProviders(
-    List<AgentProvider> providers, {
-    required String target,
-  }) {
-    final next = <AgentProvider>[];
-    final seen = <AgentProvider>{};
-    for (final provider in providers) {
-      if (provider == AgentProvider.none) continue;
-      if (seen.add(provider)) {
-        next.add(provider);
-      }
-    }
-    if (target == 'local') {
-      for (final provider in const [
-        AgentProvider.codex,
-        AgentProvider.claude,
-        AgentProvider.openclaw,
-      ]) {
-        if (seen.add(provider)) {
-          next.add(provider);
-        }
-      }
-    }
-    return next.isEmpty ? _fallbackProvidersForTarget(target) : next;
-  }
-
-  List<AgentProvider> _fallbackProvidersForTarget(String target) {
-    if (target == 'local') {
-      return const [
-        AgentProvider.codex,
-        AgentProvider.claude,
-        AgentProvider.openclaw,
-      ];
-    }
-    return const [AgentProvider.codex];
+  String _providerIdForKind(SessionKind kind) {
+    return switch (kind) {
+      SessionKind.codex => 'codex',
+      SessionKind.claude => 'claude',
+      SessionKind.openclaw => 'openclaw',
+      SessionKind.generic => 'generic',
+    };
   }
 
   Map<String, String> _envForAddress(String address) {
